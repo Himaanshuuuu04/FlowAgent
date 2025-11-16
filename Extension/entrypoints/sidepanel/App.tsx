@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import "./App.css";
-import { X, RefreshCw } from "lucide-react"; // You'll need to install lucide-react
+import { X, RefreshCw } from "lucide-react";
+import { wsClient } from "../utils/websocket-client";
 
 // --- START: Interfaces from both projects ---
 interface Tab {
@@ -63,6 +64,19 @@ function App() {
   const [tokenStatus, setTokenStatus] = useState<string>("");
   const browserInfo = getBrowserInfo();
 
+  // Agent Generator state
+  const [agentGoal, setAgentGoal] = useState("");
+  const [agentUrl, setAgentUrl] = useState("");
+  const [generatedActionPlan, setGeneratedActionPlan] = useState<any>(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+
+  // Conversation stats state
+  const [conversationStats, setConversationStats] = useState<any>(null);
+
+  // WebSocket state
+  const [wsConnected, setWsConnected] = useState(false);
+  const [useWebSocket, setUseWebSocket] = useState(true); // Toggle between WS and HTTP
+
   // --- START: Merged useEffect and Auth Functions ---
 
   useEffect(() => {
@@ -73,7 +87,34 @@ function App() {
     loadTabs();
     loadApiKey();
 
-    // 3. Set up storage listener for both auth and tabs
+    // 3. Setup WebSocket connection
+    setupWebSocket();
+
+    // 4. Load conversation stats
+    loadConversationStats();
+
+    // 5. Activate AI frame on active tab when sidepanel opens
+    const activateFrame = async () => {
+      try {
+        const [tab] = await browser.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        if (tab.id) {
+          await browser.runtime.sendMessage({
+            type: "ACTIVATE_AI_FRAME",
+            tabId: tab.id,
+          });
+          console.log("AI frame activation requested from sidepanel");
+        }
+      } catch (error) {
+        console.log("Could not activate AI frame:", error);
+      }
+    };
+
+    activateFrame();
+
+    // 5. Set up storage listener for both auth and tabs
     const handleStorageChange = (
       changes: Record<string, Browser.storage.StorageChange>,
       areaName: string
@@ -93,10 +134,50 @@ function App() {
 
     browser.storage.onChanged.addListener(handleStorageChange);
 
+    // Cleanup: deactivate frame and disconnect WebSocket when component unmounts
     return () => {
       browser.storage.onChanged.removeListener(handleStorageChange);
+
+      // Disconnect WebSocket
+      wsClient.disconnect();
+
+      browser.tabs
+        .query({ active: true, currentWindow: true })
+        .then(([tab]) => {
+          if (tab.id) {
+            browser.runtime
+              .sendMessage({
+                type: "DEACTIVATE_AI_FRAME",
+                tabId: tab.id,
+              })
+              .catch(() => {});
+          }
+        });
     };
   }, []);
+
+  // --- WebSocket Setup ---
+  const setupWebSocket = () => {
+    // Listen for connection status
+    wsClient.on("connection_status", (data: any) => {
+      setWsConnected(data.connected);
+      if (data.connected) {
+        console.log("✅ WebSocket connected");
+        setResponse("🔗 WebSocket connected to server");
+      } else {
+        console.log("❌ WebSocket disconnected:", data.reason);
+        setResponse("⚠️ WebSocket disconnected. Falling back to HTTP...");
+      }
+    });
+
+    // Listen for generation progress
+    wsClient.on("generation_progress", (data: any) => {
+      setResponse(`⏳ ${data.message}`);
+    });
+
+    // Check initial connection status
+    setWsConnected(wsClient.isSocketConnected());
+  };
 
   // --- Auth Functions (Refactored for browser.storage) ---
 
@@ -231,10 +312,18 @@ function App() {
     } catch (err: any) {
       console.error("Auth Error:", err);
       // Handle user cancellation gracefully
-      if (String(err).toLowerCase().includes("user cancelled") || String(err).toLowerCase().includes("denied") || String(err).toLowerCase().includes("aborted")) {
-        alert("Authentication cancelled. Please allow access in the popup to sign in.")
+      if (
+        String(err).toLowerCase().includes("user cancelled") ||
+        String(err).toLowerCase().includes("denied") ||
+        String(err).toLowerCase().includes("aborted")
+      ) {
+        alert(
+          "Authentication cancelled. Please allow access in the popup to sign in."
+        );
       } else {
-        alert(`Authentication failed: ${err.message}\n\nMake sure the backend service is running.`);
+        alert(
+          `Authentication failed: ${err.message}\n\nMake sure the backend service is running.`
+        );
       }
     } finally {
       setAuthLoading(false);
@@ -278,29 +367,29 @@ function App() {
 
   const handleManualRefresh = async () => {
     if (!user?.refreshToken) {
-      alert("No refresh token available. Please re-authenticate.")
-      return
+      alert("No refresh token available. Please re-authenticate.");
+      return;
     }
 
-    setTokenStatus("🔄 Refreshing token...")
+    setTokenStatus("🔄 Refreshing token...");
 
-    const refreshResult = await refreshAccessToken(user.refreshToken)
+    const refreshResult = await refreshAccessToken(user.refreshToken);
 
     if (refreshResult) {
       const updatedUserData = {
         ...user,
         token: refreshResult.accessToken,
         tokenTimestamp: Date.now(),
-        tokenExpiresIn: refreshResult.expiresIn
-      }
-      await browser.storage.local.set({ googleUser: updatedUserData })
-      setUser(updatedUserData)
-      setTokenStatus("✅ Token refreshed successfully")
+        tokenExpiresIn: refreshResult.expiresIn,
+      };
+      await browser.storage.local.set({ googleUser: updatedUserData });
+      setUser(updatedUserData);
+      setTokenStatus("✅ Token refreshed successfully");
     } else {
-      setTokenStatus("❌ Failed to refresh token")
-      alert("Failed to refresh token. Please re-authenticate.")
+      setTokenStatus("❌ Failed to refresh token");
+      alert("Failed to refresh token. Please re-authenticate.");
     }
-  }
+  };
 
   // --- WXT Functions (Now complete) ---
   const loadApiKey = async () => {
@@ -313,6 +402,43 @@ function App() {
   const saveApiKey = async () => {
     await browser.storage.local.set({ geminiApiKey: apiKey });
     setResponse("API Key saved!");
+  };
+
+  const loadConversationStats = async () => {
+    try {
+      // Try WebSocket first if enabled
+      if (useWebSocket && wsConnected) {
+        const data = await wsClient.getStats();
+        if (data.ok) {
+          setConversationStats(data.stats);
+        }
+      } else {
+        // Fallback to HTTP
+        const response = await fetch(
+          "http://localhost:8080/conversation-stats"
+        );
+        const data = await response.json();
+        if (data.ok) {
+          setConversationStats(data.stats);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load conversation stats:", error);
+      // Try HTTP fallback if WebSocket fails
+      if (useWebSocket) {
+        try {
+          const response = await fetch(
+            "http://localhost:8080/conversation-stats"
+          );
+          const data = await response.json();
+          if (data.ok) {
+            setConversationStats(data.stats);
+          }
+        } catch (httpError) {
+          console.error("HTTP fallback also failed:", httpError);
+        }
+      }
+    }
   };
 
   const loadTabs = async () => {
@@ -407,6 +533,271 @@ Only respond with the JSON, nothing else.`;
       }
     } catch (error) {
       setResponse(`Error: ${(error as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const extractDOMStructure = async (tabId: number) => {
+    try {
+      const result = await browser.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          // Extract simplified DOM structure with interactive elements
+          const extractElement = (el: Element, depth = 0): any => {
+            if (depth > 5) return null; // Limit depth to avoid huge payloads
+
+            const tag = el.tagName.toLowerCase();
+            const id = el.id ? `#${el.id}` : "";
+            const classes = el.className
+              ? `.${String(el.className)
+                  .split(" ")
+                  .filter((c) => c)
+                  .join(".")}`
+              : "";
+            const text = Array.from(el.childNodes)
+              .filter((n) => n.nodeType === 3)
+              .map((n) => n.textContent?.trim())
+              .filter((t) => t && t.length < 50)
+              .join(" ");
+
+            // Focus on interactive elements
+            const isInteractive =
+              ["input", "button", "textarea", "select", "a", "form"].includes(
+                tag
+              ) || el.getAttribute("contenteditable") === "true";
+
+            const node: any = {
+              tag,
+              selector: `${tag}${id}${classes}`,
+              text: text.substring(0, 100),
+            };
+
+            // Add relevant attributes
+            if (el.getAttribute("type")) node.type = el.getAttribute("type");
+            if (el.getAttribute("placeholder"))
+              node.placeholder = el.getAttribute("placeholder");
+            if (el.getAttribute("name")) node.name = el.getAttribute("name");
+            if (el.getAttribute("role")) node.role = el.getAttribute("role");
+            if (el.getAttribute("aria-label"))
+              node.ariaLabel = el.getAttribute("aria-label");
+
+            // Recursively process children (only for containers)
+            if (
+              isInteractive ||
+              ["form", "div", "main", "section"].includes(tag)
+            ) {
+              const children = Array.from(el.children)
+                .map((child) => extractElement(child, depth + 1))
+                .filter((c) => c !== null);
+              if (children.length > 0) node.children = children;
+            }
+
+            return node;
+          };
+
+          const bodyStructure = extractElement(document.body, 0);
+
+          // Also get all interactive elements directly
+          const interactiveElements = Array.from(
+            document.querySelectorAll(
+              'input, button, textarea, select, a[href], [contenteditable="true"]'
+            )
+          )
+            .slice(0, 50)
+            .map((el) => ({
+              tag: el.tagName.toLowerCase(),
+              type: el.getAttribute("type"),
+              id: el.id,
+              class: el.className,
+              placeholder: el.getAttribute("placeholder"),
+              name: el.getAttribute("name"),
+              text: el.textContent?.trim().substring(0, 50),
+              ariaLabel: el.getAttribute("aria-label"),
+            }));
+
+          return {
+            url: window.location.href,
+            title: document.title,
+            structure: bodyStructure,
+            interactive: interactiveElements,
+          };
+        },
+      });
+
+      return result[0]?.result || null;
+    } catch (error) {
+      console.error("Error extracting DOM:", error);
+      return null;
+    }
+  };
+
+  const generateAgent = async () => {
+    if (!agentGoal.trim()) {
+      alert("Please enter a goal for the agent");
+      return;
+    }
+
+    if (!activeTab?.id) {
+      alert("No active tab found");
+      return;
+    }
+
+    setAgentLoading(true);
+    setGeneratedActionPlan(null);
+    setResponse("📄 Analyzing page structure...");
+
+    try {
+      // Extract DOM structure from the active tab
+      const domStructure = await extractDOMStructure(activeTab.id);
+
+      if (!domStructure) {
+        setResponse(
+          "⚠️ Could not extract page structure. Proceeding without it..."
+        );
+      } else {
+        setResponse(
+          `📄 Found ${
+            domStructure.interactive?.length || 0
+          } interactive elements. Generating plan...`
+        );
+      }
+
+      let data;
+
+      // Try WebSocket first if enabled and connected
+      if (useWebSocket && wsConnected) {
+        try {
+          data = await wsClient.generateScript(
+            agentGoal,
+            agentUrl || activeTab?.url || "",
+            domStructure
+          );
+        } catch (wsError) {
+          console.error(
+            "WebSocket generation failed, falling back to HTTP:",
+            wsError
+          );
+          setResponse("⚠️ WebSocket failed, using HTTP...");
+          // Fall through to HTTP
+        }
+      }
+
+      // HTTP fallback or primary method
+      if (!data) {
+        const response = await fetch("http://localhost:8080/generate-script", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            goal: agentGoal,
+            target_url: agentUrl || activeTab?.url || "",
+            dom_structure: domStructure,
+            constraints: {},
+          }),
+        });
+
+        data = await response.json();
+      }
+
+      if (data.ok) {
+        setGeneratedActionPlan(data.action_plan);
+        const actionCount = data.action_plan?.actions?.length || 0;
+        const contextInfo = data.context_used
+          ? ` (📚 Using ${data.similar_interactions} similar example${
+              data.similar_interactions > 1 ? "s" : ""
+            })`
+          : "";
+        const connectionType =
+          useWebSocket && wsConnected ? "WebSocket" : "HTTP";
+        setResponse(
+          `✅ Generated ${actionCount} action(s) successfully via ${connectionType}!${contextInfo}`
+        );
+
+        // Refresh stats
+        loadConversationStats();
+      } else {
+        setResponse(
+          `❌ Error: ${data.error}\n${data.problems?.join("\n") || ""}`
+        );
+      }
+    } catch (error) {
+      setResponse(`❌ Error: ${(error as Error).message}`);
+    } finally {
+      setAgentLoading(false);
+    }
+  };
+
+  const runGeneratedAgent = async () => {
+    if (!generatedActionPlan) {
+      alert("Generate an action plan first");
+      return;
+    }
+
+    if (!activeTab?.id) {
+      alert("No active tab found");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await browser.runtime.sendMessage({
+        type: "RUN_GENERATED_AGENT",
+        payload: {
+          action_plan: generatedActionPlan,
+          tabId: activeTab.id,
+        },
+      });
+
+      if (!result) {
+        setResponse("❌ Error: No response from background script");
+        return;
+      }
+
+      // Send execution result back to server for learning
+      try {
+        const resultData = {
+          success: result.success,
+          results: result.results,
+          message: result.message,
+        };
+
+        // Try WebSocket first
+        if (useWebSocket && wsConnected) {
+          try {
+            await wsClient.updateResult(resultData);
+          } catch (wsError) {
+            console.error("WebSocket update failed, using HTTP fallback");
+            await fetch("http://localhost:8080/update-result", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ result: resultData }),
+            });
+          }
+        } else {
+          // HTTP fallback
+          await fetch("http://localhost:8080/update-result", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ result: resultData }),
+          });
+        }
+      } catch (updateError) {
+        console.error("Failed to update result on server:", updateError);
+      }
+
+      if (result.success) {
+        setResponse("✅ All actions executed successfully!");
+      } else {
+        const failedActions =
+          result.results?.filter((r: any) => !r.success) || [];
+        setResponse(
+          `⚠️ ${result.message}\n\nFailed actions: ${failedActions
+            .map((a: any) => a.action)
+            .join(", ")}`
+        );
+      }
+    } catch (error) {
+      setResponse(`❌ Error: ${(error as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -569,7 +960,13 @@ Only respond with the JSON, nothing else.`;
                   backgroundColor: "#0a0a0a",
                 }}
               >
-                <div style={{ fontSize: "11px", color: "#666", marginBottom: "4px" }}>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#666",
+                    marginBottom: "4px",
+                  }}
+                >
                   User ID
                 </div>
                 <div style={{ fontSize: "12px", color: "#fff" }}>{user.id}</div>
@@ -582,7 +979,13 @@ Only respond with the JSON, nothing else.`;
                   backgroundColor: "#0a0a0a",
                 }}
               >
-                <div style={{ fontSize: "11px", color: "#666", marginBottom: "4px" }}>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#666",
+                    marginBottom: "4px",
+                  }}
+                >
                   Verified Email
                 </div>
                 <div style={{ fontSize: "12px", color: "#fff" }}>
@@ -597,7 +1000,13 @@ Only respond with the JSON, nothing else.`;
                   backgroundColor: "#0a0a0a",
                 }}
               >
-                <div style={{ fontSize: "11px", color: "#666", marginBottom: "4px" }}>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#666",
+                    marginBottom: "4px",
+                  }}
+                >
                   Browser
                 </div>
                 <div style={{ fontSize: "12px", color: "#fff" }}>
@@ -612,7 +1021,13 @@ Only respond with the JSON, nothing else.`;
                   backgroundColor: "#0a0a0a",
                 }}
               >
-                <div style={{ fontSize: "11px", color: "#666", marginBottom: "4px" }}>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#666",
+                    marginBottom: "4px",
+                  }}
+                >
                   Login Time
                 </div>
                 <div style={{ fontSize: "12px", color: "#fff" }}>
@@ -794,8 +1209,8 @@ Only respond with the JSON, nothing else.`;
                           {showToken
                             ? user.token
                             : String(user.token).length > 48
-                              ? String(user.token).substring(0, 48) + "..."
-                              : user.token}
+                            ? String(user.token).substring(0, 48) + "..."
+                            : user.token}
                         </div>
                       </div>
                       <button
@@ -852,8 +1267,8 @@ Only respond with the JSON, nothing else.`;
                           {showRefreshToken
                             ? user.refreshToken
                             : String(user.refreshToken).length > 48
-                              ? String(user.refreshToken).substring(0, 48) + "..."
-                              : user.refreshToken}
+                            ? String(user.refreshToken).substring(0, 48) + "..."
+                            : user.refreshToken}
                         </div>
                       </div>
                       <button
@@ -918,13 +1333,60 @@ Only respond with the JSON, nothing else.`;
               Logout
             </button>
             {/* == END: Full Profile Block from Plasmo == */}
-
           </div>
         </div>
       )}
       {/* --- END: Profile UI --- */}
 
       {/* --- START: Main WXT AI Assistant UI --- */}
+
+      {/* WebSocket Connection Status */}
+      <section
+        style={{
+          padding: "8px 12px",
+          backgroundColor: wsConnected ? "#0a3d0a" : "#3d0a0a",
+          borderRadius: "6px",
+          marginBottom: "12px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          border: `1px solid ${wsConnected ? "#4ade80" : "#f87171"}`,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span
+            style={{
+              fontSize: "12px",
+              color: wsConnected ? "#4ade80" : "#f87171",
+            }}
+          >
+            {wsConnected
+              ? "🟢 WebSocket Connected"
+              : "🔴 WebSocket Disconnected"}
+          </span>
+        </div>
+        <button
+          onClick={() => {
+            if (wsConnected) {
+              wsClient.disconnect();
+            } else {
+              wsClient.connect();
+            }
+          }}
+          style={{
+            fontSize: "10px",
+            padding: "4px 8px",
+            backgroundColor: "#2a2a2a",
+            border: "1px solid #4285f4",
+            borderRadius: "4px",
+            cursor: "pointer",
+            color: "#4285f4",
+          }}
+        >
+          {wsConnected ? "Disconnect" : "Reconnect"}
+        </button>
+      </section>
+
       <section className="api-key-section">
         <h3>Gemini API Key</h3>
         <input
@@ -935,6 +1397,49 @@ Only respond with the JSON, nothing else.`;
         />
         <button onClick={saveApiKey}>Save Key</button>
       </section>
+
+      {conversationStats && (
+        <section
+          style={{
+            padding: "12px",
+            backgroundColor: "#0a0a0a",
+            borderRadius: "8px",
+            marginBottom: "16px",
+          }}
+        >
+          <h3
+            style={{ fontSize: "14px", marginBottom: "8px", color: "#4285f4" }}
+          >
+            📚 AI Learning Stats
+          </h3>
+          <div style={{ fontSize: "12px", color: "#ccc" }}>
+            <div style={{ marginBottom: "4px" }}>
+              💾 Total Interactions:{" "}
+              <strong>{conversationStats.total_interactions}</strong>
+            </div>
+            <div style={{ marginBottom: "4px" }}>
+              ✅ Successful:{" "}
+              <strong>{conversationStats.successful_interactions}</strong>
+            </div>
+            <div style={{ marginBottom: "4px" }}>
+              📝 Current Session:{" "}
+              <strong>{conversationStats.current_session_length}</strong>
+            </div>
+          </div>
+          <button
+            onClick={loadConversationStats}
+            style={{
+              fontSize: "11px",
+              padding: "4px 8px",
+              marginTop: "8px",
+              backgroundColor: "#2a2a2a",
+              border: "1px solid #4285f4",
+            }}
+          >
+            Refresh Stats
+          </button>
+        </section>
+      )}
 
       <section className="active-tab-section">
         <h3>Active Tab</h3>
@@ -967,6 +1472,111 @@ Only respond with the JSON, nothing else.`;
             Ask AI
           </button>
         </div>
+      </section>
+
+      <section className="command-section">
+        <h3>🤖 Generate Custom Agent</h3>
+        <input
+          type="text"
+          value={agentGoal}
+          onChange={(e) => setAgentGoal(e.target.value)}
+          placeholder="Goal: e.g., 'Click the login button'"
+          style={{ marginBottom: "8px" }}
+        />
+        <input
+          type="text"
+          value={agentUrl}
+          onChange={(e) => setAgentUrl(e.target.value)}
+          placeholder="Target URL (optional, uses active tab)"
+          style={{ marginBottom: "8px" }}
+        />
+        <div className="button-group">
+          <button onClick={generateAgent} disabled={agentLoading}>
+            {agentLoading ? "Generating..." : "Generate Agent"}
+          </button>
+          <button
+            onClick={runGeneratedAgent}
+            disabled={loading || !generatedActionPlan}
+          >
+            Run Agent
+          </button>
+        </div>
+        {generatedActionPlan && (
+          <details style={{ marginTop: "12px" }} open>
+            <summary style={{ cursor: "pointer", color: "#4285f4" }}>
+              View Action Plan ({generatedActionPlan.actions?.length || 0}{" "}
+              steps)
+            </summary>
+            <div
+              style={{
+                marginTop: "8px",
+                backgroundColor: "#0a0a0a",
+                padding: "12px",
+                borderRadius: "6px",
+                maxHeight: "300px",
+                overflow: "auto",
+              }}
+            >
+              {generatedActionPlan.actions?.map((action: any, i: number) => (
+                <div
+                  key={i}
+                  style={{
+                    padding: "8px",
+                    marginBottom: "8px",
+                    backgroundColor: "#1a1a1a",
+                    borderRadius: "4px",
+                    borderLeft: "3px solid #4285f4",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "11px",
+                      color: "#999",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    Step {i + 1}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "13px",
+                      fontWeight: "bold",
+                      color: "#4285f4",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    {action.type}
+                  </div>
+                  {action.description && (
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: "#ccc",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      {action.description}
+                    </div>
+                  )}
+                  {action.selector && (
+                    <div style={{ fontSize: "11px", color: "#888" }}>
+                      Selector:{" "}
+                      <code style={{ color: "#ffa500" }}>
+                        {action.selector}
+                      </code>
+                    </div>
+                  )}
+                  {action.value && (
+                    <div style={{ fontSize: "11px", color: "#888" }}>
+                      Value:{" "}
+                      <span style={{ color: "#90ee90" }}>{action.value}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
       </section>
 
       {response && (

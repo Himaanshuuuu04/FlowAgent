@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { FolderOpen, RefreshCw, MapPin, FileText } from "lucide-react";
 import "./popup.css"; // This import is correct
 
 // Interfaces from your background script
@@ -55,7 +56,6 @@ function useBrowserStorage<T>(
   }, [key]);
   // ▲▲▲ THIS IS THE FIX ▲▲▲
 
-
   const setStoredValue = (newValue: T) => {
     // We don't need this, as the background script is writing the value
   };
@@ -65,7 +65,49 @@ function useBrowserStorage<T>(
 
 function IndexPopup() {
   const [tabsData] = useBrowserStorage<TabsData | null>("tabsData", null);
-  const [activeTabUrl] = useBrowserStorage<TabInfo | null>("activeTabUrl", null);
+  const [activeTabUrl] = useBrowserStorage<TabInfo | null>(
+    "activeTabUrl",
+    null
+  );
+
+  // Notify active tab when popup opens
+  useEffect(() => {
+    const activateFrame = async () => {
+      try {
+        const [tab] = await browser.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        if (tab.id) {
+          await browser.runtime.sendMessage({
+            type: "ACTIVATE_AI_FRAME",
+            tabId: tab.id,
+          });
+          console.log("AI frame activation requested");
+        }
+      } catch (error) {
+        console.log("Could not activate AI frame:", error);
+      }
+    };
+
+    activateFrame();
+
+    // Cleanup: deactivate frame when popup might close
+    return () => {
+      browser.tabs
+        .query({ active: true, currentWindow: true })
+        .then(([tab]) => {
+          if (tab.id) {
+            browser.runtime
+              .sendMessage({
+                type: "DEACTIVATE_AI_FRAME",
+                tabId: tab.id,
+              })
+              .catch(() => {});
+          }
+        });
+    };
+  }, []);
 
   const handleRefresh = () => {
     console.log("Refresh clicked");
@@ -75,24 +117,28 @@ function IndexPopup() {
   return (
     <div className="popup-container">
       <div className="header">
-        <h2>🗂️ Tabs Manager</h2>
+        <h2 className="header-title">
+          <FolderOpen size={18} className="header-icon" />
+          Tabs Manager
+        </h2>
         <button onClick={handleRefresh} className="refresh-btn">
-          🔄 Refresh
+          <RefreshCw size={14} />
         </button>
       </div>
       <div className="section active-tab-section">
-        <h3>📍 Active Tab</h3>
+        <h3 className="section-title">
+          <MapPin size={14} className="section-icon" />
+          Active Tab
+        </h3>
         {activeTabUrl ? (
           <div className="tab-item active">
             {activeTabUrl.favIconUrl && (
-              <img
-                src={activeTabUrl.favIconUrl}
-                alt=""
-                className="favicon"
-              />
+              <img src={activeTabUrl.favIconUrl} alt="" className="favicon" />
             )}
             <div className="tab-info">
-              <div className="tab-title">{activeTabUrl.title || "No title"}</div>
+              <div className="tab-title">
+                {activeTabUrl.title || "No title"}
+              </div>
               <div className="tab-url">{activeTabUrl.url || "No URL"}</div>
             </div>
           </div>
@@ -101,17 +147,16 @@ function IndexPopup() {
         )}
       </div>
       <div className="section">
-        <h3>📑 All Tabs ({tabsData?.totalTabs || 0})</h3>
+        <h3 className="section-title">
+          <FileText size={14} className="section-icon" />
+          All Tabs ({tabsData?.totalTabs || 0})
+        </h3>
         <div className="tabs-list">
           {tabsData?.allTabs && tabsData.allTabs.length > 0 ? (
             tabsData.allTabs.map((tab, index) => (
               <div key={tab.id || index} className="tab-item">
                 {tab.favIconUrl && (
-                  <img
-                    src={tab.favIconUrl}
-                    alt=""
-                    className="favicon"
-                  />
+                  <img src={tab.favIconUrl} alt="" className="favicon" />
                 )}
                 <div className="tab-info">
                   <div className="tab-title">{tab.title || "No title"}</div>

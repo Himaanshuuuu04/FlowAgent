@@ -3,11 +3,72 @@ export default defineContentScript({
   main() {
     console.log("Content script loaded on:", window.location.href);
 
+    // Create and manage AI frame overlay
+    let aiFrame: HTMLElement | null = null;
+
+    function createAIFrame() {
+      if (aiFrame) return; // Already exists
+
+      aiFrame = document.createElement("div");
+      aiFrame.id = "ai-extension-frame";
+      aiFrame.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        pointer-events: none;
+        z-index: 2147483647;
+        border: 8px solid rgba(66, 133, 244, 0.8);
+        box-shadow: inset 0 0 40px rgba(66, 133, 244, 0.3),
+                    0 0 60px rgba(66, 133, 244, 0.5);
+        animation: ai-pulse 2s ease-in-out infinite;
+      `;
+
+      // Add keyframe animation
+      const style = document.createElement("style");
+      style.textContent = `
+        @keyframes ai-pulse {
+          0%, 100% {
+            border-color: rgba(66, 133, 244, 0.8);
+            box-shadow: inset 0 0 40px rgba(66, 133, 244, 0.3),
+                        0 0 60px rgba(66, 133, 244, 0.5);
+          }
+          50% {
+            border-color: rgba(66, 133, 244, 1);
+            box-shadow: inset 0 0 60px rgba(66, 133, 244, 0.5),
+                        0 0 80px rgba(66, 133, 244, 0.7);
+          }
+        }
+      `;
+      document.head.appendChild(style);
+      document.body.appendChild(aiFrame);
+      console.log("AI frame activated");
+    }
+
+    function removeAIFrame() {
+      if (aiFrame) {
+        aiFrame.remove();
+        aiFrame = null;
+        console.log("AI frame deactivated");
+      }
+    }
+
     // Listen for messages from background script
     browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "PERFORM_ACTION") {
         performAction(message.action).then(sendResponse);
         return true; // Keep channel open for async response
+      }
+
+      if (message.type === "TOGGLE_AI_FRAME") {
+        if (message.active) {
+          createAIFrame();
+        } else {
+          removeAIFrame();
+        }
+        sendResponse({ success: true });
+        return true;
       }
     });
 
