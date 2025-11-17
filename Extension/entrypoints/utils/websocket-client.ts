@@ -93,6 +93,75 @@ export class WebSocketClient {
       console.log(`📨 Received event: ${eventName}`, args);
       this.emit(eventName, ...args);
     });
+
+    // Listen for tool execution requests from agent
+    this.socket.on("tool_execution_request", async (data) => {
+      console.log("\n" + "=".repeat(60));
+      console.log("🔧 TOOL EXECUTION REQUEST RECEIVED IN WEBSOCKET CLIENT");
+      console.log("Tool ID:", data.tool_id);
+      console.log("Action Type:", data.action_type);
+      console.log("Params:", JSON.stringify(data.params, null, 2));
+      console.log("Context: Running in", window.location.href);
+      console.log("=".repeat(60) + "\n");
+
+      try {
+        console.log(
+          "📤 Sending EXECUTE_AGENT_TOOL message to background script..."
+        );
+        console.log("Message to send:", {
+          type: "EXECUTE_AGENT_TOOL",
+          payload: {
+            tool_id: data.tool_id,
+            action_type: data.action_type,
+            params: data.params,
+          },
+        });
+
+        // Send to background script to execute the tool
+        const result = await browser.runtime.sendMessage({
+          type: "EXECUTE_AGENT_TOOL",
+          payload: {
+            tool_id: data.tool_id,
+            action_type: data.action_type,
+            params: data.params,
+          },
+        });
+
+        console.log("✅ Tool execution completed");
+        console.log("Result received:", JSON.stringify(result, null, 2));
+
+        // Send result back to server
+        console.log("📤 Sending tool_execution_result back to server...");
+        this.socket?.emit("tool_execution_result", {
+          tool_id: data.tool_id,
+          result: result,
+        });
+        console.log("✅ Result sent to server");
+      } catch (error) {
+        console.error("❌ Tool execution error:", error);
+        console.error("Error stack:", (error as Error).stack);
+        this.socket?.emit("tool_execution_result", {
+          tool_id: data.tool_id,
+          result: { success: false, error: (error as Error).message },
+        });
+      }
+    });
+
+    // Listen for agent progress updates
+    this.socket.on("agent_progress", (data) => {
+      console.log(`🤖 Agent progress [${data.status}]: ${data.message}`);
+      this.emit("agent_progress", data);
+    });
+
+    this.socket.on("agent_completed", (data) => {
+      console.log("✅ Agent completed:", data);
+      this.emit("agent_completed", data);
+    });
+
+    this.socket.on("agent_error", (data) => {
+      console.error("❌ Agent error:", data);
+      this.emit("agent_error", data);
+    });
   }
 
   /**
@@ -325,6 +394,94 @@ export class WebSocketClient {
         this.socket?.off("stats_error", errorHandler);
         reject(new Error("Request timeout"));
       }, 10000);
+    });
+  }
+
+  /**
+   * Clear conversation history using WebSocket
+   */
+  async clearHistory(): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        reject(new Error("WebSocket not connected"));
+        return;
+      }
+
+      const successHandler = (data: any) => {
+        this.socket?.off("history_cleared", successHandler);
+        this.socket?.off("clear_error", errorHandler);
+        resolve(data);
+      };
+
+      const errorHandler = (data: any) => {
+        this.socket?.off("history_cleared", successHandler);
+        this.socket?.off("clear_error", errorHandler);
+        reject(new Error(data.error || "Unknown error"));
+      };
+
+      this.socket.on("history_cleared", successHandler);
+      this.socket.on("clear_error", errorHandler);
+
+      this.socket.emit("clear_history_ws");
+
+      setTimeout(() => {
+        this.socket?.off("history_cleared", successHandler);
+        this.socket?.off("clear_error", errorHandler);
+        reject(new Error("Request timeout"));
+      }, 10000);
+    });
+  }
+
+  /**
+   * Execute AI agent with sophisticated tools
+   */
+  async executeAgent(
+    goal: string,
+    onProgress?: (data: any) => void
+  ): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        reject(new Error("WebSocket not connected"));
+        return;
+      }
+
+      // Listen for progress updates
+      const progressHandler = (data: any) => {
+        console.log("Agent progress:", data.message);
+        if (onProgress) {
+          onProgress(data);
+        }
+        this.emit("agent_progress", data);
+      };
+
+      const successHandler = (data: any) => {
+        this.socket?.off("agent_progress", progressHandler);
+        this.socket?.off("agent_completed", successHandler);
+        this.socket?.off("agent_error", errorHandler);
+        resolve(data);
+      };
+
+      const errorHandler = (data: any) => {
+        this.socket?.off("agent_progress", progressHandler);
+        this.socket?.off("agent_completed", successHandler);
+        this.socket?.off("agent_error", errorHandler);
+        reject(new Error(data.error || "Unknown error"));
+      };
+
+      this.socket.on("agent_progress", progressHandler);
+      this.socket.on("agent_completed", successHandler);
+      this.socket.on("agent_error", errorHandler);
+
+      // Send agent execution request
+      this.socket.emit("execute_agent_ws", { goal });
+
+      // Timeout after 5 minutes (agents can take time)
+      setTimeout(() => {
+        this.socket?.off("agent_progress", progressHandler);
+        this.socket?.off("agent_completed", successHandler);
+        this.socket?.off("agent_error", errorHandler);
+        reject(new Error("Agent execution timeout"));
+      }, 300000);
     });
   }
 

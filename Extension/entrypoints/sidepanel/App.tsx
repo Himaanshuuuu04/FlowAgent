@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import "./App.css";
 import { X, RefreshCw } from "lucide-react";
 import { wsClient } from "../utils/websocket-client";
+import { AgentExecutor } from "./AgentExecutor";
 
 // --- START: Interfaces from both projects ---
 interface Tab {
@@ -1426,18 +1427,66 @@ Only respond with the JSON, nothing else.`;
               <strong>{conversationStats.current_session_length}</strong>
             </div>
           </div>
-          <button
-            onClick={loadConversationStats}
-            style={{
-              fontSize: "11px",
-              padding: "4px 8px",
-              marginTop: "8px",
-              backgroundColor: "#2a2a2a",
-              border: "1px solid #4285f4",
-            }}
-          >
-            Refresh Stats
-          </button>
+          <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+            <button
+              onClick={loadConversationStats}
+              style={{
+                fontSize: "11px",
+                padding: "4px 8px",
+                backgroundColor: "#2a2a2a",
+                border: "1px solid #4285f4",
+                flex: 1,
+              }}
+            >
+              Refresh Stats
+            </button>
+            <button
+              onClick={async () => {
+                if (
+                  confirm(
+                    "Are you sure you want to delete all conversation history? This cannot be undone."
+                  )
+                ) {
+                  try {
+                    if (useWebSocket && wsConnected) {
+                      await wsClient.clearHistory();
+                      setResponse(
+                        "✅ Conversation history cleared successfully!"
+                      );
+                    } else {
+                      const response = await fetch(
+                        "http://localhost:8080/clear-history",
+                        {
+                          method: "POST",
+                        }
+                      );
+                      const data = await response.json();
+                      if (data.ok) {
+                        setResponse(
+                          "✅ Conversation history cleared successfully!"
+                        );
+                      } else {
+                        setResponse(`❌ Error: ${data.error}`);
+                      }
+                    }
+                    loadConversationStats();
+                  } catch (error) {
+                    setResponse(`❌ Error: ${(error as Error).message}`);
+                  }
+                }
+              }}
+              style={{
+                fontSize: "11px",
+                padding: "4px 8px",
+                backgroundColor: "#dc2626",
+                border: "1px solid #dc2626",
+                color: "white",
+                flex: 1,
+              }}
+            >
+              🗑️ Clear History
+            </button>
+          </div>
         </section>
       )}
 
@@ -1472,6 +1521,11 @@ Only respond with the JSON, nothing else.`;
             Ask AI
           </button>
         </div>
+      </section>
+
+      <section className="command-section">
+        <h3>🤖 LangChain Agent Executor</h3>
+        <AgentExecutor wsConnected={wsConnected} />
       </section>
 
       <section className="command-section">

@@ -22,7 +22,31 @@ export default defineBackground(() => {
 
   // --- START: Logic from WXT AI Assistant (Your Friend's Code) ---
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log("Background received message:", message);
+    console.log("\n🔔 Background received message:");
+    console.log("Message type:", message.type);
+    console.log("Message:", JSON.stringify(message, null, 2));
+    console.log("Sender:", sender);
+
+    // ============= AGENT TOOL EXECUTION - PRIORITY CHECK =============
+    if (message.type === "EXECUTE_AGENT_TOOL") {
+      console.log("\n🎬 ✅ EXECUTE_AGENT_TOOL MATCHED!");
+      console.log("Payload:", JSON.stringify(message.payload, null, 2));
+
+      handleExecuteAgentTool(message.payload)
+        .then((result) => {
+          console.log(
+            "✅ handleExecuteAgentTool completed, sending response:",
+            result
+          );
+          sendResponse(result);
+        })
+        .catch((err) => {
+          console.error("❌ EXECUTE_AGENT_TOOL error:", err);
+          sendResponse({ success: false, error: err.message });
+        });
+      return true;
+    }
+    // ============= END AGENT TOOL EXECUTION =============
 
     if (message.type === "ACTIVATE_AI_FRAME") {
       handleActivateAIFrame(message.tabId)
@@ -95,7 +119,10 @@ export default defineBackground(() => {
     }
 
     // If no handler matched, send error response
-    console.warn("Unknown message type:", message.type);
+    console.warn("❌ Unknown message type:", message.type);
+    console.warn(
+      "Available types: ACTIVATE_AI_FRAME, DEACTIVATE_AI_FRAME, GET_ACTIVE_TAB, GET_ALL_TABS, EXECUTE_ACTION, GEMINI_REQUEST, RUN_GENERATED_AGENT, EXECUTE_AGENT_TOOL"
+    );
     sendResponse({ success: false, error: "Unknown message type" });
     return false;
   });
@@ -350,6 +377,31 @@ async function handleRunGeneratedAgent(payload: any) {
     };
   } catch (error) {
     console.error("Error executing action plan:", error);
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+async function handleExecuteAgentTool(payload: any) {
+  try {
+    const { tool_id, action_type, params } = payload;
+
+    console.log("\n" + "=".repeat(60));
+    console.log("🔧 HANDLE_EXECUTE_AGENT_TOOL CALLED");
+    console.log("Tool ID:", tool_id);
+    console.log("Action Type:", action_type);
+    console.log("Params:", JSON.stringify(params, null, 2));
+    console.log("=".repeat(60) + "\n");
+
+    console.log(`📞 Calling executeAgentTool for: ${action_type}`);
+    const result = await executeAgentTool(action_type, params);
+
+    console.log(`✅ Tool execution complete: ${action_type}`);
+    console.log("Result:", JSON.stringify(result, null, 2));
+
+    return result;
+  } catch (error) {
+    console.error("❌ Error executing agent tool:", error);
+    console.error("Error stack:", (error as Error).stack);
     return { success: false, error: (error as Error).message };
   }
 }
@@ -698,3 +750,761 @@ async function storeTabsInfo(): Promise<TabsData | null> {
   return null;
 }
 // --- END: Helpers for Tab Tracking ---
+
+// =================================================================
+// SOPHISTICATED TOOL EXECUTION HANDLERS FOR AGENT
+// =================================================================
+
+/**
+ * Execute sophisticated tools requested by the AI agent
+ * This handles all browser automation tools defined in agent.py
+ */
+async function executeAgentTool(actionType: string, params: any): Promise<any> {
+  console.log(`🎯 executeAgentTool - Action: ${actionType}`);
+
+  const [activeTab] = await browser.tabs.query({
+    active: true,
+    currentWindow: true,
+  });
+
+  if (!activeTab.id) {
+    console.error("❌ No active tab found");
+    return { success: false, error: "No active tab found" };
+  }
+
+  const tabId = activeTab.id;
+  console.log(`📍 Active tab ID: ${tabId}, URL: ${activeTab.url}`);
+
+  try {
+    console.log(`🔍 Looking for handler for action: ${actionType}`);
+
+    switch (actionType) {
+      case "GET_PAGE_INFO":
+        console.log("➡️ Calling getPageInfo");
+        return await getPageInfo(tabId, params);
+
+      case "EXTRACT_DOM":
+        console.log("➡️ Calling extractDomStructure");
+        return await extractDomStructure(tabId, params);
+
+      case "CLICK":
+        console.log("➡️ Calling clickElement");
+        return await clickElement(tabId, params);
+
+      case "TYPE":
+        console.log("➡️ Calling typeText");
+        return await typeText(tabId, params);
+
+      case "FILL_FORM":
+        console.log("➡️ Calling fillFormFields");
+        return await fillFormFields(tabId, params);
+
+      case "SELECT_DROPDOWN":
+        console.log("➡️ Calling selectDropdownOption");
+        return await selectDropdownOption(tabId, params);
+
+      case "WAIT_FOR_ELEMENT":
+        console.log("➡️ Calling waitForElement");
+        return await waitForElement(tabId, params);
+
+      case "SCROLL":
+        console.log("➡️ Calling scrollPage");
+        return await scrollPage(tabId, params);
+
+      case "OPEN_TAB":
+        console.log("➡️ Calling openNewTab");
+        return await openNewTab(params);
+
+      case "CLOSE_TAB":
+        console.log("➡️ Calling closeCurrentTab");
+        return await closeCurrentTab(tabId);
+
+      case "SWITCH_TAB":
+        console.log("➡️ Calling switchTab");
+        return await switchTab(params);
+
+      case "NAVIGATE":
+        console.log("➡️ Calling navigateToUrl");
+        return await navigateToUrl(tabId, params);
+
+      case "GET_ALL_TABS":
+        console.log("➡️ Calling getAllTabs");
+        return await getAllTabs();
+
+      case "SCREENSHOT":
+        console.log("➡️ Calling takeScreenshot");
+        return await takeScreenshot(tabId, params);
+
+      case "GET_ELEMENT_TEXT":
+        console.log("➡️ Calling getElementText");
+        return await getElementText(tabId, params);
+
+      case "GET_ELEMENT_ATTRIBUTES":
+        console.log("➡️ Calling getElementAttributes");
+        return await getElementAttributes(tabId, params);
+
+      case "EXECUTE_SCRIPT":
+        console.log("➡️ Calling executeCustomScript");
+        return await executeCustomScript(tabId, params);
+
+      case "GET_COOKIES":
+        console.log("➡️ Calling getCookies");
+        return await getCookies(params);
+
+      case "SET_COOKIE":
+        console.log("➡️ Calling setCookie");
+        return await setCookie(params);
+
+      case "GET_LOCAL_STORAGE":
+        console.log("➡️ Calling getLocalStorage");
+        return await getLocalStorage(tabId, params);
+
+      case "SET_LOCAL_STORAGE":
+        console.log("➡️ Calling setLocalStorage");
+        return await setLocalStorage(tabId, params);
+
+      case "HOVER":
+        console.log("➡️ Calling hoverElement");
+        return await hoverElement(tabId, params);
+
+      case "RELOAD_TAB":
+        console.log("➡️ Calling reloadTab");
+        return await reloadTab(tabId, params);
+
+      case "GO_BACK":
+        console.log("➡️ Calling goBack");
+        return await goBack(tabId);
+
+      case "GO_FORWARD":
+        console.log("➡️ Calling goForward");
+        return await goForward(tabId);
+
+      case "FIND_ELEMENTS":
+        console.log("➡️ Calling findElements");
+        return await findElements(tabId, params);
+
+      default:
+        console.error(`❌ Unknown tool: ${actionType}`);
+        return { success: false, error: `Unknown tool: ${actionType}` };
+    }
+  } catch (error) {
+    console.error(`❌ Error in executeAgentTool for ${actionType}:`, error);
+    console.error("Error stack:", (error as Error).stack);
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+// Tool implementation functions
+
+async function getPageInfo(tabId: number, params: any) {
+  console.log("📍 getPageInfo called with params:", params);
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (include_dom: boolean, extract_interactive: boolean) => {
+      const info: any = {
+        url: window.location.href,
+        title: document.title,
+        hasVideo: !!document.querySelector("video"),
+        hasAudio: !!document.querySelector("audio"),
+        hasForm: !!document.querySelector("form"),
+        imageCount: document.querySelectorAll("img").length,
+        linkCount: document.querySelectorAll("a").length,
+      };
+
+      if (extract_interactive) {
+        info.interactive = Array.from(
+          document.querySelectorAll(
+            'button, a, input, textarea, select, [role="button"], [contenteditable="true"]'
+          )
+        )
+          .slice(0, 50)
+          .map((el) => ({
+            tag: el.tagName.toLowerCase(),
+            type: el.getAttribute("type"),
+            id: el.id,
+            class: el.className,
+            name: el.getAttribute("name"),
+            placeholder: el.getAttribute("placeholder"),
+            ariaLabel: el.getAttribute("aria-label"),
+            text: el.textContent?.trim().substring(0, 100),
+          }));
+      }
+
+      return info;
+    },
+    args: [params.include_dom, params.extract_interactive],
+  });
+
+  return { success: true, data: result[0].result };
+}
+
+async function extractDomStructure(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (selector: string | null, depth: number) => {
+      function extractElement(el: Element, currentDepth: number): any {
+        if (currentDepth > depth) return null;
+
+        const children =
+          currentDepth < depth
+            ? Array.from(el.children)
+                .map((child) => extractElement(child, currentDepth + 1))
+                .filter((c) => c !== null)
+            : [];
+
+        return {
+          tag: el.tagName.toLowerCase(),
+          id: el.id || null,
+          class: el.className || null,
+          attributes: Array.from(el.attributes).reduce((acc: any, attr) => {
+            acc[attr.name] = attr.value;
+            return acc;
+          }, {}),
+          text: el.textContent?.trim().substring(0, 200),
+          children: children,
+        };
+      }
+
+      const root = selector ? document.querySelector(selector) : document.body;
+      return root ? extractElement(root, 0) : null;
+    },
+    args: [params.selector, params.depth],
+  });
+
+  return { success: true, data: result[0].result };
+}
+
+async function clickElement(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (selector: string) => {
+      const el = document.querySelector(selector) as HTMLElement;
+      if (!el) throw new Error(`Element not found: ${selector}`);
+      el.click();
+      return `Clicked: ${selector}`;
+    },
+    args: [params.selector],
+  });
+
+  if (params.wait_after) {
+    await new Promise((resolve) => setTimeout(resolve, params.wait_after));
+  }
+
+  return { success: true, message: result[0].result };
+}
+
+async function typeText(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (
+      selector: string,
+      text: string,
+      clear_first: boolean,
+      press_enter: boolean
+    ) => {
+      const el = document.querySelector(selector);
+      if (!el) throw new Error(`Element not found: ${selector}`);
+
+      if (clear_first && (el as HTMLInputElement).value !== undefined) {
+        (el as HTMLInputElement).value = "";
+      }
+
+      if ((el as HTMLElement).isContentEditable) {
+        (el as HTMLElement).focus();
+        (el as HTMLElement).textContent = text;
+      } else {
+        (el as HTMLInputElement).value = text;
+      }
+
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+
+      if (press_enter) {
+        el.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+        );
+      }
+
+      return `Typed text into: ${selector}`;
+    },
+    args: [
+      params.selector,
+      params.text,
+      params.clear_first,
+      params.press_enter,
+    ],
+  });
+
+  return { success: true, message: result[0].result };
+}
+
+async function fillFormFields(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (fields: Record<string, string>, submitSelector: string | null) => {
+      const results: string[] = [];
+
+      for (const [selector, value] of Object.entries(fields)) {
+        const el = document.querySelector(selector) as HTMLInputElement;
+        if (el) {
+          el.value = value;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          results.push(`Filled ${selector}`);
+        } else {
+          results.push(`Not found: ${selector}`);
+        }
+      }
+
+      if (submitSelector) {
+        const submitBtn = document.querySelector(submitSelector) as HTMLElement;
+        if (submitBtn) {
+          submitBtn.click();
+          results.push(`Submitted form via ${submitSelector}`);
+        }
+      }
+
+      return results;
+    },
+    args: [params.fields, params.submit_selector],
+  });
+
+  return { success: true, results: result[0].result };
+}
+
+async function selectDropdownOption(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (
+      selector: string,
+      value: string | null,
+      text: string | null,
+      index: number | null
+    ) => {
+      const el = document.querySelector(selector) as HTMLSelectElement;
+      if (!el) throw new Error(`Element not found: ${selector}`);
+
+      if (value !== null) {
+        el.value = value;
+      } else if (text !== null) {
+        const option = Array.from(el.options).find((opt) =>
+          opt.text.includes(text)
+        );
+        if (option) el.value = option.value;
+      } else if (index !== null) {
+        el.selectedIndex = index;
+      }
+
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return `Selected option in: ${selector}`;
+    },
+    args: [params.selector, params.value, params.text, params.index],
+  });
+
+  return { success: true, message: result[0].result };
+}
+
+async function waitForElement(tabId: number, params: any) {
+  const startTime = Date.now();
+  const timeout = params.timeout || 10000;
+  const condition = params.condition || "visible";
+
+  while (Date.now() - startTime < timeout) {
+    const result = await browser.scripting.executeScript({
+      target: { tabId },
+      func: (selector: string, cond: string) => {
+        const el = document.querySelector(selector);
+        if (!el) return false;
+
+        if (cond === "exists") return true;
+        if (cond === "visible") {
+          const style = window.getComputedStyle(el);
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            (el as HTMLElement).offsetParent !== null
+          );
+        }
+        if (cond === "hidden") {
+          const style = window.getComputedStyle(el);
+          return (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            (el as HTMLElement).offsetParent === null
+          );
+        }
+        return false;
+      },
+      args: [params.selector, condition],
+    });
+
+    if (result[0].result) {
+      return {
+        success: true,
+        message: `Element ${params.selector} is ${condition}`,
+      };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  return {
+    success: false,
+    error: `Timeout waiting for ${params.selector} to be ${condition}`,
+  };
+}
+
+async function scrollPage(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (direction: string, amount: number, toElement: string | null) => {
+      if (toElement) {
+        const el = document.querySelector(toElement);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          return `Scrolled to element: ${toElement}`;
+        }
+      }
+
+      if (direction === "down") {
+        window.scrollBy({ top: amount, behavior: "smooth" });
+      } else if (direction === "up") {
+        window.scrollBy({ top: -amount, behavior: "smooth" });
+      } else if (direction === "top") {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } else if (direction === "bottom") {
+        window.scrollTo({
+          top: document.body.scrollHeight,
+          behavior: "smooth",
+        });
+      }
+
+      return `Scrolled ${direction}`;
+    },
+    args: [params.direction, params.amount, params.to_element],
+  });
+
+  return { success: true, message: result[0].result };
+}
+
+async function openNewTab(params: any) {
+  console.log("📍 openNewTab called with params:", params);
+  const newTab = await browser.tabs.create({
+    url: params.url || "about:blank",
+    active: params.active !== false, // default to true
+  });
+
+  console.log("✅ New tab created:", newTab.id, newTab.url);
+  return { success: true, tabId: newTab.id, url: newTab.url };
+}
+
+async function closeCurrentTab(tabId: number) {
+  await browser.tabs.remove(tabId);
+  return { success: true, message: `Closed tab ${tabId}` };
+}
+
+async function switchTab(params: any) {
+  if (params.tab_id) {
+    await browser.tabs.update(params.tab_id, { active: true });
+    return { success: true, message: `Switched to tab ${params.tab_id}` };
+  } else if (params.direction) {
+    const allTabs = await browser.tabs.query({ currentWindow: true });
+    const activeTab = await browser.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    const currentIndex = allTabs.findIndex((t) => t.id === activeTab[0].id);
+
+    let newIndex;
+    if (params.direction === "next") {
+      newIndex = (currentIndex + 1) % allTabs.length;
+    } else {
+      newIndex = (currentIndex - 1 + allTabs.length) % allTabs.length;
+    }
+
+    const targetTab = allTabs[newIndex];
+    if (targetTab.id) {
+      await browser.tabs.update(targetTab.id, { active: true });
+      return { success: true, message: `Switched to ${params.direction} tab` };
+    }
+  }
+
+  return { success: false, error: "Invalid switch tab parameters" };
+}
+
+async function navigateToUrl(tabId: number, params: any) {
+  console.log("📍 navigateToUrl called with params:", params);
+  await browser.tabs.update(tabId, { url: params.url });
+
+  if (params.wait_for_load) {
+    await new Promise((resolve) => {
+      const listener = (
+        updatedTabId: number,
+        changeInfo: chrome.tabs.TabChangeInfo
+      ) => {
+        if (updatedTabId === tabId && changeInfo.status === "complete") {
+          browser.tabs.onUpdated.removeListener(listener);
+          resolve(null);
+        }
+      };
+      browser.tabs.onUpdated.addListener(listener);
+      setTimeout(resolve, 10000);
+    });
+  }
+
+  return { success: true, message: `Navigated to ${params.url}` };
+}
+
+async function getAllTabs() {
+  const tabs = await browser.tabs.query({});
+  const tabsInfo = tabs.map((tab) => ({
+    id: tab.id,
+    url: tab.url,
+    title: tab.title,
+    active: tab.active,
+  }));
+
+  return { success: true, tabs: tabsInfo };
+}
+
+async function takeScreenshot(tabId: number, params: any) {
+  // Note: Full page screenshots require additional logic
+  const dataUrl = await browser.tabs.captureVisibleTab();
+  return { success: true, screenshot: dataUrl };
+}
+
+async function getElementText(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (selector: string, attribute: string | null) => {
+      const el = document.querySelector(selector);
+      if (!el) throw new Error(`Element not found: ${selector}`);
+
+      if (attribute) {
+        return el.getAttribute(attribute);
+      }
+
+      return el.textContent?.trim();
+    },
+    args: [params.selector, params.attribute],
+  });
+
+  return { success: true, text: result[0].result };
+}
+
+async function getElementAttributes(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (selector: string) => {
+      const el = document.querySelector(selector);
+      if (!el) throw new Error(`Element not found: ${selector}`);
+
+      const attrs: Record<string, string> = {};
+      for (const attr of el.attributes) {
+        attrs[attr.name] = attr.value;
+      }
+
+      return attrs;
+    },
+    args: [params.selector],
+  });
+
+  return { success: true, attributes: result[0].result };
+}
+
+async function executeCustomScript(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: new Function("args", params.script) as any,
+    args: params.args || [],
+  });
+
+  return { success: true, result: result[0].result };
+}
+
+async function getCookies(params: any) {
+  const allCookies = await browser.cookies.getAll(
+    params.url ? { url: params.url } : {}
+  );
+
+  // Filter to only essential authentication/session cookies
+  const authKeywords = [
+    "session",
+    "auth",
+    "token",
+    "user",
+    "login",
+    "ssid",
+    "sid",
+    "hsid",
+    "account",
+    "credentials",
+  ];
+
+  const essentialCookies = allCookies.filter((cookie) => {
+    const nameLower = cookie.name.toLowerCase();
+    return authKeywords.some((keyword) => nameLower.includes(keyword));
+  });
+
+  // If no auth cookies found, return first 5 cookies as fallback
+  const cookiesToReturn =
+    essentialCookies.length > 0
+      ? essentialCookies.slice(0, 10) // Max 10 auth cookies
+      : allCookies.slice(0, 5); // Or first 5 general cookies
+
+  // Return minimal cookie info (name, value, domain only)
+  const simplifiedCookies = cookiesToReturn.map((cookie) => ({
+    name: cookie.name,
+    value:
+      cookie.value.length > 100
+        ? cookie.value.substring(0, 100) + "..."
+        : cookie.value,
+    domain: cookie.domain,
+  }));
+
+  return {
+    success: true,
+    cookies: simplifiedCookies,
+    total_cookies: allCookies.length,
+    returned_cookies: simplifiedCookies.length,
+    filtered: essentialCookies.length > 0,
+  };
+}
+
+async function setCookie(params: any) {
+  await browser.cookies.set({
+    name: params.name,
+    value: params.value,
+    domain: params.domain,
+    path: params.path || "/",
+    expirationDate: params.expires,
+  });
+
+  return { success: true, message: `Cookie ${params.name} set` };
+}
+
+async function getLocalStorage(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (key: string | null) => {
+      if (key) {
+        return localStorage.getItem(key);
+      }
+
+      const all: Record<string, string> = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k) all[k] = localStorage.getItem(k) || "";
+      }
+
+      return all;
+    },
+    args: [params.key],
+  });
+
+  return { success: true, data: result[0].result };
+}
+
+async function setLocalStorage(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (key: string, value: string) => {
+      localStorage.setItem(key, value);
+      return `Set ${key} in localStorage`;
+    },
+    args: [params.key, params.value],
+  });
+
+  return { success: true, message: result[0].result };
+}
+
+async function hoverElement(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (selector: string) => {
+      const el = document.querySelector(selector) as HTMLElement;
+      if (!el) throw new Error(`Element not found: ${selector}`);
+
+      const event = new MouseEvent("mouseover", { bubbles: true });
+      el.dispatchEvent(event);
+
+      return `Hovered over: ${selector}`;
+    },
+    args: [params.selector],
+  });
+
+  if (params.duration) {
+    await new Promise((resolve) => setTimeout(resolve, params.duration));
+  }
+
+  return { success: true, message: result[0].result };
+}
+
+async function reloadTab(tabId: number, params: any) {
+  await browser.tabs.reload(tabId, { bypassCache: params.bypass_cache });
+
+  await new Promise((resolve) => {
+    const listener = (
+      updatedTabId: number,
+      changeInfo: chrome.tabs.TabChangeInfo
+    ) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        browser.tabs.onUpdated.removeListener(listener);
+        resolve(null);
+      }
+    };
+    browser.tabs.onUpdated.addListener(listener);
+    setTimeout(resolve, 5000);
+  });
+
+  return { success: true, message: "Tab reloaded" };
+}
+
+async function goBack(tabId: number) {
+  await browser.scripting.executeScript({
+    target: { tabId },
+    func: () => window.history.back(),
+  });
+
+  return { success: true, message: "Navigated back" };
+}
+
+async function goForward(tabId: number) {
+  await browser.scripting.executeScript({
+    target: { tabId },
+    func: () => window.history.forward(),
+  });
+
+  return { success: true, message: "Navigated forward" };
+}
+
+async function findElements(tabId: number, params: any) {
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (selector: string, filterVisible: boolean) => {
+      const elements = Array.from(document.querySelectorAll(selector));
+
+      return elements
+        .map((el, index) => {
+          const isVisible = filterVisible
+            ? window.getComputedStyle(el).display !== "none" &&
+              window.getComputedStyle(el).visibility !== "hidden"
+            : true;
+
+          if (!isVisible && filterVisible) return null;
+
+          return {
+            index,
+            tag: el.tagName.toLowerCase(),
+            id: el.id,
+            class: el.className,
+            text: el.textContent?.trim().substring(0, 100),
+          };
+        })
+        .filter((item) => item !== null);
+    },
+    args: [params.selector, params.filter_visible],
+  });
+
+  return { success: true, elements: result[0].result };
+}
