@@ -8,6 +8,10 @@ import {
   RefreshCw,
   LogOut,
   Zap,
+  Key,
+  Eye,
+  EyeOff,
+  Trash2,
 } from "lucide-react";
 import { wsClient } from "../../utils/websocket-client";
 import { CuteTextInput } from "./CuteTextInput";
@@ -118,6 +122,14 @@ export function UnifiedSettingsMenu({
   const [selectedModel, setSelectedModel] = useState(LLM_OPTIONS[0].value);
   const [autoConnect, setAutoConnect] = useState(true);
 
+  // Credentials state
+  const [savedEmail, setSavedEmail] = useState("");
+  const [savedPassword, setSavedPassword] = useState("");
+  const [showCredentials, setShowCredentials] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+
   // Load saved model and auto-connect preference from localStorage on mount
   useEffect(() => {
     const savedModel = localStorage.getItem("selectedLLM");
@@ -129,6 +141,9 @@ export function UnifiedSettingsMenu({
     browser.storage.local.get("wsAutoConnect").then((result) => {
       setAutoConnect(result.wsAutoConnect !== false);
     });
+
+    // Load saved credentials
+    loadCredentials();
   }, []);
   const handleModelChange = (value: string) => {
     setSelectedModel(value);
@@ -146,6 +161,59 @@ export function UnifiedSettingsMenu({
       wsClient.enableAutoConnect();
     } else {
       wsClient.disableAutoConnect();
+    }
+  };
+
+  const loadCredentials = async () => {
+    try {
+      const result = await browser.storage.local.get([
+        "savedEmail",
+        "savedPassword",
+      ]);
+      if (result.savedEmail) setSavedEmail(result.savedEmail);
+      if (result.savedPassword) setSavedPassword(result.savedPassword);
+    } catch (error) {
+      console.error("Error loading credentials:", error);
+    }
+  };
+
+  const saveCredentials = async () => {
+    if (!newEmail || !newPassword) {
+      alert("Please enter both email and password");
+      return;
+    }
+
+    try {
+      await browser.storage.local.set({
+        savedEmail: newEmail,
+        savedPassword: newPassword,
+      });
+      setSavedEmail(newEmail);
+      setSavedPassword(newPassword);
+      setNewEmail("");
+      setNewPassword("");
+      alert("Credentials saved successfully!");
+    } catch (error) {
+      console.error("Error saving credentials:", error);
+      alert("Failed to save credentials");
+    }
+  };
+
+  const deleteCredentials = async () => {
+    if (!confirm("Are you sure you want to delete saved credentials?")) {
+      return;
+    }
+
+    try {
+      await browser.storage.local.remove(["savedEmail", "savedPassword"]);
+      setSavedEmail("");
+      setSavedPassword("");
+      setNewEmail("");
+      setNewPassword("");
+      alert("Credentials deleted successfully");
+    } catch (error) {
+      console.error("Error deleting credentials:", error);
+      alert("Failed to delete credentials");
     }
   };
 
@@ -408,8 +476,252 @@ export function UnifiedSettingsMenu({
               </div>
             </div>
 
+            {/* Credentials Section */}
+            <div style={{ marginTop: "20px" }}>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "12px",
+                  color: "#e5e5e5",
+                  marginBottom: "8px",
+                  fontWeight: 500,
+                }}
+              >
+                <Key size={14} />
+                Saved Credentials
+              </label>
+
+              <details
+                open={showCredentials}
+                onToggle={(e: any) => setShowCredentials(e.target.open)}
+                style={{
+                  backgroundColor: "#0a0a0a",
+                  border: "1px solid #2a2a2a",
+                  borderRadius: "8px",
+                  padding: "12px",
+                }}
+              >
+                <summary
+                  style={{
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    color: "#999",
+                    userSelect: "none",
+                    marginBottom: showCredentials ? "12px" : "0",
+                  }}
+                >
+                  {savedEmail ? "View & Manage" : "Add Credentials"}
+                </summary>
+
+                {savedEmail ? (
+                  <div style={{ marginTop: "12px" }}>
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        backgroundColor: "#1a1a1a",
+                        borderRadius: "6px",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: "10px",
+                          color: "#666",
+                          marginBottom: "4px",
+                        }}
+                      >
+                        Email
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "12px",
+                          color: "#e5e5e5",
+                          wordBreak: "break-all",
+                          overflowWrap: "break-word",
+                        }}
+                      >
+                        {savedEmail}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        backgroundColor: "#1a1a1a",
+                        borderRadius: "6px",
+                        marginBottom: "12px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <div
+                          style={{
+                            fontSize: "10px",
+                            color: "#666",
+                            marginBottom: "4px",
+                          }}
+                        >
+                          Password
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "12px",
+                            color: "#e5e5e5",
+                            filter: showPassword ? "none" : "blur(4px)",
+                            userSelect: showPassword ? "text" : "none",
+                          }}
+                        >
+                          {savedPassword}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowPassword(!showPassword)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "#4285f4",
+                          cursor: "pointer",
+                          padding: "4px",
+                          display: "flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        {showPassword ? (
+                          <EyeOff size={16} />
+                        ) : (
+                          <Eye size={16} />
+                        )}
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={deleteCredentials}
+                      style={{
+                        width: "100%",
+                        padding: "8px",
+                        backgroundColor: "#7f1d1d",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "6px",
+                        fontSize: "12px",
+                        fontWeight: 500,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "6px",
+                        transition: "all 0.2s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = "#991b1b";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = "#7f1d1d";
+                      }}
+                    >
+                      <Trash2 size={14} />
+                      Delete Credentials
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: "12px" }}>
+                    <div style={{ marginBottom: "10px" }}>
+                      <input
+                        type="email"
+                        value={newEmail}
+                        onChange={(e) => setNewEmail(e.target.value)}
+                        placeholder="Email"
+                        style={{
+                          width: "100%",
+                          padding: "10px 12px",
+                          backgroundColor: "#1a1a1a",
+                          border: "1px solid #2a2a2a",
+                          borderRadius: "6px",
+                          color: "#e5e5e5",
+                          fontSize: "12px",
+                          outline: "none",
+                          transition: "all 0.2s",
+                        }}
+                        onFocus={(e) => {
+                          e.currentTarget.style.borderColor = "#4285f4";
+                        }}
+                        onBlur={(e) => {
+                          e.currentTarget.style.borderColor = "#2a2a2a";
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ marginBottom: "10px" }}>
+                      <input
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="Password"
+                        style={{
+                          width: "100%",
+                          padding: "10px 12px",
+                          backgroundColor: "#1a1a1a",
+                          border: "1px solid #2a2a2a",
+                          borderRadius: "6px",
+                          color: "#e5e5e5",
+                          fontSize: "12px",
+                          outline: "none",
+                          transition: "all 0.2s",
+                        }}
+                        onFocus={(e) => {
+                          e.currentTarget.style.borderColor = "#4285f4";
+                        }}
+                        onBlur={(e) => {
+                          e.currentTarget.style.borderColor = "#2a2a2a";
+                        }}
+                      />
+                    </div>
+
+                    <button
+                      onClick={saveCredentials}
+                      style={{
+                        width: "100%",
+                        padding: "8px",
+                        backgroundColor: "#4285f4",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "6px",
+                        fontSize: "12px",
+                        fontWeight: 500,
+                        cursor: "pointer",
+                        transition: "all 0.2s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = "#5294ff";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = "#4285f4";
+                      }}
+                    >
+                      Save Credentials
+                    </button>
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    fontSize: "10px",
+                    color: "#666",
+                    marginTop: "8px",
+                    lineHeight: "1.4",
+                  }}
+                >
+                  Stored locally • Auto-fill ready
+                </div>
+              </details>
+            </div>
+
             {/* WebSocket Section */}
-            <div>
+            <div style={{ marginTop: "20px" }}>
               <label
                 style={{
                   display: "block",

@@ -188,6 +188,82 @@ export function useAuth() {
     }
   };
 
+  const handleGitHubLogin = async () => {
+    setAuthLoading(true);
+    try {
+      const identityApi = browser.identity;
+      if (!identityApi) throw new Error("browser.identity API not available");
+
+      const redirectUri = identityApi.getRedirectURL();
+      const clientId = "Ov23liL9c4T8V8Yh3k0s"; // GitHub OAuth App Client ID
+      const scopes = "read:user user:email";
+
+      const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(
+        redirectUri
+      )}&scope=${encodeURIComponent(scopes)}`;
+
+      const redirectResponse = await identityApi.launchWebAuthFlow({
+        url: authUrl,
+        interactive: true,
+      });
+
+      const codeMatch = redirectResponse?.match(/code=([^&]+)/);
+      const code = codeMatch ? codeMatch[1] : null;
+      if (!code) throw new Error("No authorization code found in response");
+
+      const tokenResponse = await fetch(`${BACKEND_URL}/github/exchange-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: code }),
+      });
+
+      if (!tokenResponse.ok) {
+        const errorData = await tokenResponse.json();
+        throw new Error(`Token exchange failed: ${errorData.error}`);
+      }
+
+      const tokenData = await tokenResponse.json();
+      const token = tokenData.access_token;
+
+      const userInfo = await fetch("https://api.github.com/user", {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((res) => res.json());
+
+      const fullUserData = {
+        id: userInfo.id,
+        name: userInfo.name || userInfo.login,
+        email: userInfo.email,
+        picture: userInfo.avatar_url,
+        login: userInfo.login,
+        token,
+        tokenTimestamp: Date.now(),
+        loginTime: new Date().toISOString(),
+        browser: browserInfo.name,
+        provider: "github",
+      };
+      await browser.storage.local.set({ googleUser: fullUserData });
+      setUser(fullUserData);
+      setTokenStatus("✅ GitHub authenticated");
+    } catch (err: any) {
+      console.error("GitHub Auth Error:", err);
+      if (
+        String(err).toLowerCase().includes("user cancelled") ||
+        String(err).toLowerCase().includes("denied") ||
+        String(err).toLowerCase().includes("aborted")
+      ) {
+        alert(
+          "Authentication cancelled. Please allow access in the popup to sign in."
+        );
+      } else {
+        alert(
+          `GitHub authentication failed: ${err.message}\n\nMake sure the backend service is running.`
+        );
+      }
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   const handleLogout = async () => {
     await browser.storage.local.remove("googleUser");
     setUser(null);
@@ -253,6 +329,7 @@ export function useAuth() {
     tokenStatus,
     browserInfo,
     handleLogin,
+    handleGitHubLogin,
     handleLogout,
     getTokenAge,
     getTokenExpiry,

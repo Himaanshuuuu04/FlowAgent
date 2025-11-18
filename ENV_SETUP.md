@@ -6,6 +6,14 @@ This project requires API keys to function properly. Follow these steps to set u
 
 **NEVER commit `.env` files to git!** They contain sensitive API keys that should be kept secret.
 
+## Authentication Setup
+
+### Google OAuth (Required for Google Sign-In)
+See main setup instructions below for Google OAuth configuration.
+
+### GitHub OAuth (Optional)
+For GitHub sign-in support, see **[GITHUB_OAUTH_SETUP.md](./GITHUB_OAUTH_SETUP.md)** for detailed instructions.
+
 ## Setup Instructions
 
 ### 1. Backend Environment (`himanshu/.env`)

@@ -12,8 +12,14 @@ CORS(app)  # Allow extension to call this server
 CLIENT_ID = "95116700360-13ege5jmfrjjt4vmd86oh00eu5jlei5e.apps.googleusercontent.com"
 CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# GitHub OAuth credentials
+GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID")
+GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET")
+
 print(f"Using CLIENT_ID: {CLIENT_ID}")
 print(f"Using CLIENT_SECRET: {CLIENT_SECRET}")
+print(f"Using GITHUB_CLIENT_ID: {GITHUB_CLIENT_ID}")
 
 # Configure Gemini if API key is available
 if GEMINI_API_KEY:
@@ -102,6 +108,53 @@ def refresh_token():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/github/exchange-code', methods=['POST'])
+def github_exchange_code():
+    """Exchange GitHub authorization code for access token"""
+    data = request.json
+    code = data.get('code')
+    
+    if not code:
+        return jsonify({'error': 'Missing code'}), 400
+    
+    if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
+        return jsonify({'error': 'GitHub OAuth not configured'}), 500
+    
+    try:
+        response = requests.post(
+            'https://github.com/login/oauth/access_token',
+            headers={'Accept': 'application/json'},
+            data={
+                'client_id': GITHUB_CLIENT_ID,
+                'client_secret': GITHUB_CLIENT_SECRET,
+                'code': code
+            },
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            return jsonify({
+                'error': 'Token exchange failed',
+                'details': response.text
+            }), response.status_code
+        
+        token_data = response.json()
+        
+        if 'error' in token_data:
+            return jsonify({
+                'error': token_data.get('error_description', 'Token exchange failed')
+            }), 400
+        
+        return jsonify({
+            'access_token': token_data.get('access_token'),
+            'token_type': token_data.get('token_type', 'bearer'),
+            'scope': token_data.get('scope', '')
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/chat', methods=['POST'])
 def chat():
     """Chat with LLM model (Gemini)"""
@@ -150,7 +203,11 @@ def chat():
 if __name__ == '__main__':
     if not CLIENT_SECRET:
         print("\n⚠️  WARNING: GOOGLE_CLIENT_SECRET environment variable not set!")
-        print("   OAuth features will not work.")
+        print("   Google OAuth features will not work.")
+    
+    if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
+        print("\n⚠️  WARNING: GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET not set!")
+        print("   GitHub OAuth features will not work.")
     
     if not GEMINI_API_KEY:
         print("\n⚠️  WARNING: GEMINI_API_KEY environment variable not set!")
@@ -158,7 +215,7 @@ if __name__ == '__main__':
         print("\nSet it with:")
         print("  export GEMINI_API_KEY='your-api-key-here'")
     
-    if not CLIENT_SECRET and not GEMINI_API_KEY:
+    if not CLIENT_SECRET and not GEMINI_API_KEY and not GITHUB_CLIENT_ID:
         print("\n❌ ERROR: No API keys configured!")
         exit(1)
     

@@ -17,6 +17,7 @@ function App() {
     tokenStatus,
     browserInfo,
     handleLogin,
+    handleGitHubLogin,
     handleLogout,
     getTokenAge,
     getTokenExpiry,
@@ -152,7 +153,9 @@ function App() {
   }
 
   if (!user) {
-    return <SignInScreen onLogin={handleLogin} />;
+    return (
+      <SignInScreen onLogin={handleLogin} onGitHubLogin={handleGitHubLogin} />
+    );
   }
 
   return (
