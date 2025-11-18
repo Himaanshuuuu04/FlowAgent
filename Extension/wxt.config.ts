@@ -3,7 +3,7 @@ import { defineConfig } from "wxt";
 export default defineConfig({
   modules: ["@wxt-dev/module-react"],
   manifest: {
-    name: "AI Assistant",
+    name: "Open DIA",
     description: "AI-powered browser assistant with sidebar",
     permissions: [
       "activeTab",
