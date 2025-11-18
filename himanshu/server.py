@@ -47,6 +47,9 @@ api_key = os.getenv("GROQ_API_KEY")
 # Track connected clients and their pending tool calls
 connected_clients = {}  # {client_id: {"sid": sid, "pending_tool_calls": {}}}
 
+# Track active agent execution threads
+active_agent_threads = {}  # {client_id: {"thread": thread, "stop_flag": bool}}
+
 # Initialize LangChain Groq Model
 llm = ChatGroq(
     api_key=api_key,
@@ -810,6 +813,14 @@ def handle_execute_agent_ws(data):
         # Execute agent in a separate thread to avoid blocking
         def run_agent():
             try:
+                # Check if stop was requested
+                if client_id in active_agent_threads and active_agent_threads[client_id].get("stop_flag"):
+                    logger.info(f"🛑 Agent execution stopped before starting")
+                    socketio.emit('agent_error', {'error': 'Agent execution stopped by user'}, to=client_id)
+                    if client_id in active_agent_threads:
+                        del active_agent_threads[client_id]
+                    return
+                
                 logger.info(f"🤖 Invoking agent with goal: {goal}")
                 # Run the agent with correct message format
                 result = agent.invoke({
@@ -845,10 +856,17 @@ def handle_execute_agent_ws(data):
                 socketio.emit('agent_error', {
                     'error': str(e)
                 }, to=client_id)
+            finally:
+                # Clean up active thread tracking
+                if client_id in active_agent_threads:
+                    del active_agent_threads[client_id]
+                    logger.info(f"🧹 Cleaned up agent thread for client {client_id}")
         
         # Start agent execution in background
         thread = Thread(target=run_agent)
+        active_agent_threads[client_id] = {"thread": thread, "stop_flag": False}
         thread.start()
+        logger.info(f"🚀 Agent thread started for client {client_id}")
         
     except Exception as e:
         logger.error(f"Error executing agent: {str(e)}")
@@ -886,6 +904,44 @@ def handle_agent_feedback(data):
         'message': message,
         'timestamp': data.get('timestamp')
     })
+
+@socketio.on('stop_agent_ws')
+def handle_stop_agent_ws(data):
+    """Stop the currently running agent execution"""
+    client_id = request.sid  # type: ignore
+    
+    logger.info(f"\n{'='*80}")
+    logger.info(f"🛑 STOP AGENT REQUEST RECEIVED")
+    logger.info(f"Client ID: {client_id}")
+    logger.info(f"{'='*80}\n")
+    
+    try:
+        if client_id in active_agent_threads:
+            # Set the stop flag
+            active_agent_threads[client_id]["stop_flag"] = True
+            logger.info(f"✅ Stop flag set for client {client_id}")
+            
+            # Notify the client
+            emit('agent_stopped', {
+                'ok': True,
+                'message': 'Agent execution stop requested'
+            })
+            logger.info(f"📤 Sent 'agent_stopped' event to client")
+            
+            # Clean up pending tool calls
+            if client_id in connected_clients:
+                connected_clients[client_id]["pending_tool_calls"] = {}
+                logger.info(f"🧹 Cleared pending tool calls for client {client_id}")
+        else:
+            logger.warning(f"⚠️ No active agent execution found for client {client_id}")
+            emit('agent_stopped', {
+                'ok': False,
+                'message': 'No active agent execution to stop'
+            })
+    
+    except Exception as e:
+        logger.error(f"❌ Error stopping agent: {str(e)}")
+        emit('agent_error', {'error': f'Error stopping agent: {str(e)}'})
 
 # =================================================================
 # MAIN

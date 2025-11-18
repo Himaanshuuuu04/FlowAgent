@@ -1,4 +1,14 @@
 import { useState } from "react";
+import {
+  Settings,
+  Brain,
+  Wrench,
+  CheckCircle,
+  XCircle,
+  FileText,
+  Clock,
+  StopCircle,
+} from "lucide-react";
 import { wsClient } from "../utils/websocket-client";
 
 interface AgentExecutorProps {
@@ -51,18 +61,41 @@ export function AgentExecutor({ wsConnected }: AgentExecutorProps) {
         ...prev,
         {
           status: "completed",
-          message: "✅ Agent execution completed successfully!",
+          message: "Agent execution completed successfully!",
           timestamp: new Date().toISOString(),
         },
       ]);
     } catch (err) {
-      const errorMessage = (err as Error).message;
+      let errorMessage = (err as Error).message;
+
+      // Parse HTML error responses for better display
+      if (
+        errorMessage.includes("<!DOCTYPE html>") ||
+        errorMessage.includes("<html")
+      ) {
+        if (errorMessage.includes("groq.com") && errorMessage.includes("500")) {
+          errorMessage =
+            "Groq API is currently unavailable (500 Internal Server Error). Please try again in a few minutes.";
+        } else if (
+          errorMessage.includes("502") ||
+          errorMessage.includes("503")
+        ) {
+          errorMessage =
+            "Service temporarily unavailable. Please try again later.";
+        } else if (errorMessage.includes("429")) {
+          errorMessage =
+            "Rate limit exceeded. Please wait before trying again.";
+        } else {
+          errorMessage = "Server error occurred. Please try again later.";
+        }
+      }
+
       setError(errorMessage);
       setProgress((prev) => [
         ...prev,
         {
           status: "error",
-          message: `❌ Error: ${errorMessage}`,
+          message: `Error: ${errorMessage}`,
           timestamp: new Date().toISOString(),
         },
       ]);
@@ -71,20 +104,32 @@ export function AgentExecutor({ wsConnected }: AgentExecutorProps) {
     }
   };
 
+  const handleStop = async () => {
+    try {
+      await wsClient.stopAgent();
+      setIsExecuting(false);
+      setError("Agent execution stopped by user");
+    } catch (err: any) {
+      console.error("Failed to stop agent:", err);
+      setError(err.message || "Failed to stop agent");
+    }
+  };
+
   const getStatusIcon = (status: string) => {
+    const iconProps = { size: 14, strokeWidth: 2.5 };
     switch (status) {
       case "initializing":
-        return "⚙️";
+        return <Settings {...iconProps} />;
       case "planning":
-        return "🧠";
+        return <Brain {...iconProps} />;
       case "executing":
-        return "🔧";
+        return <Wrench {...iconProps} />;
       case "completed":
-        return "✅";
+        return <CheckCircle {...iconProps} />;
       case "error":
-        return "❌";
+        return <XCircle {...iconProps} />;
       default:
-        return "📝";
+        return <FileText {...iconProps} />;
     }
   };
 
@@ -114,296 +159,376 @@ export function AgentExecutor({ wsConnected }: AgentExecutorProps) {
   ];
 
   return (
-    <div className="agent-executor">
-      <div className="section-header">
-        <h3>🤖 AI Agent Executor</h3>
-        <p className="section-description">
-          Natural language browser automation with sophisticated tools
-        </p>
-      </div>
-
-      <div className="agent-input-section">
-        <label htmlFor="agent-goal">What should the agent do?</label>
-        <textarea
-          id="agent-goal"
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          placeholder="Example: Open Gmail, find the first unread email, and reply with 'Thanks!'"
-          rows={4}
-          disabled={isExecuting}
+    <div className="agent-executor-fixed">
+      {/* WebSocket Connection Warning */}
+      {!wsConnected && (
+        <div
           style={{
-            width: "100%",
-            padding: "12px",
-            borderRadius: "8px",
-            border: "1px solid #374151",
-            backgroundColor: "#1f2937",
-            color: "#f3f4f6",
-            fontSize: "14px",
-            resize: "vertical",
-            fontFamily: "inherit",
+            padding: "8px 12px",
+            fontSize: "11px",
+            color: "#f87171",
+            backgroundColor: "#2a1414",
+            borderBottom: "1px solid #3f1f1f",
+            textAlign: "center",
+            fontWeight: 500,
           }}
-        />
+        >
+          ⚠️ WebSocket not connected - Please connect in settings
+        </div>
+      )}
 
-        <div className="example-goals">
-          <p
-            style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "8px" }}
-          >
-            Try these examples:
-          </p>
+      {/* Output Section */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: "8px 12px",
+          backgroundColor: "#0f0f0f",
+          borderBottom: "1px solid #1f1f1f",
+          minHeight: "200px",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {progress.length === 0 && !error && !result ? (
           <div
             style={{
               display: "flex",
-              flexWrap: "wrap",
-              gap: "8px",
+              alignItems: "center",
+              justifyContent: "center",
+              height: "100%",
+              color: "#666",
+              fontSize: "13px",
+              textAlign: "center",
+              padding: "20px",
             }}
           >
-            {exampleGoals.map((example, index) => (
-              <button
-                key={index}
-                onClick={() => setGoal(example)}
-                disabled={isExecuting}
+            <div style={{ maxWidth: "320px" }}>
+              <FileText
+                size={32}
+                strokeWidth={1.5}
+                style={{ marginBottom: "12px", opacity: 0.5 }}
+              />
+              <h3
                 style={{
-                  padding: "6px 12px",
-                  fontSize: "12px",
-                  backgroundColor: "#374151",
-                  border: "1px solid #4b5563",
-                  borderRadius: "6px",
-                  color: "#d1d5db",
-                  cursor: isExecuting ? "not-allowed" : "pointer",
-                  transition: "all 0.2s",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isExecuting) {
-                    e.currentTarget.style.backgroundColor = "#4b5563";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = "#374151";
+                  margin: "0 0 6px 0",
+                  color: "#999",
+                  fontSize: "14px",
+                  fontWeight: 500,
                 }}
               >
-                {example}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <button
-          onClick={handleExecute}
-          disabled={isExecuting || !wsConnected}
-          style={{
-            width: "100%",
-            padding: "12px",
-            marginTop: "12px",
-            backgroundColor: isExecuting
-              ? "#4b5563"
-              : wsConnected
-              ? "#3b82f6"
-              : "#6b7280",
-            color: "white",
-            border: "none",
-            borderRadius: "8px",
-            fontSize: "14px",
-            fontWeight: "600",
-            cursor: isExecuting || !wsConnected ? "not-allowed" : "pointer",
-            transition: "all 0.2s",
-          }}
-        >
-          {isExecuting ? "🔄 Agent is working..." : "🚀 Execute Agent"}
-        </button>
-
-        {!wsConnected && (
-          <p
-            style={{
-              marginTop: "8px",
-              fontSize: "12px",
-              color: "#f87171",
-              textAlign: "center",
-            }}
-          >
-            ⚠️ WebSocket not connected. Please ensure the server is running.
-          </p>
-        )}
-      </div>
-
-      {progress.length > 0 && (
-        <div className="agent-progress">
-          <h4
-            style={{
-              marginBottom: "12px",
-              fontSize: "14px",
-              fontWeight: "600",
-            }}
-          >
-            📊 Execution Progress
-          </h4>
-          <div
-            style={{
-              maxHeight: "300px",
-              overflowY: "auto",
-              backgroundColor: "#111827",
-              borderRadius: "8px",
-              padding: "12px",
-            }}
-          >
-            {progress.map((update, index) => (
-              <div
-                key={index}
+                AI Agent Ready
+              </h3>
+              <p
                 style={{
-                  marginBottom: "8px",
-                  padding: "8px",
-                  backgroundColor: "#1f2937",
-                  borderRadius: "6px",
-                  borderLeft: `3px solid ${getStatusColor(update.status)}`,
+                  margin: "0 0 16px 0",
+                  fontSize: "11px",
+                  color: "#555",
+                  lineHeight: "1.5",
+                }}
+              >
+                Describe your task and the agent will handle it
+              </p>
+
+              <div style={{ textAlign: "left" }}>
+                <p
+                  style={{
+                    margin: "0 0 8px 0",
+                    fontSize: "10px",
+                    color: "#777",
+                    fontWeight: 500,
+                  }}
+                >
+                  ✨ Capabilities:
+                </p>
+                <ul
+                  style={{
+                    margin: 0,
+                    padding: "0 0 0 18px",
+                    fontSize: "10px",
+                    color: "#666",
+                    lineHeight: "1.6",
+                  }}
+                >
+                  <li>Navigate & interact with websites</li>
+                  <li>Fill forms & extract data</li>
+                  <li>Manage tabs & take screenshots</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            {progress.length > 0 && (
+              <div>
+                {progress.map((update, index) => (
+                  <div
+                    key={index}
+                    style={{
+                      marginBottom: "8px",
+                      fontSize: "12px",
+                      lineHeight: "1.6",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        marginBottom: "2px",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "flex",
+                          color: getStatusColor(update.status),
+                        }}
+                      >
+                        {getStatusIcon(update.status)}
+                      </span>
+                      <span
+                        style={{
+                          color: getStatusColor(update.status),
+                          fontWeight: "600",
+                          fontSize: "11px",
+                        }}
+                      >
+                        {update.status.toUpperCase()}
+                      </span>
+                      {update.timestamp && (
+                        <span
+                          style={{
+                            fontSize: "10px",
+                            color: "#666666",
+                          }}
+                        >
+                          {new Date(update.timestamp).toLocaleTimeString()}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        color: "#e5e5e5",
+                        paddingLeft: "20px",
+                      }}
+                    >
+                      {update.message}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {result && (
+              <div
+                style={{
+                  marginTop: "12px",
+                  paddingTop: "12px",
+                  borderTop: "1px solid #1f1f1f",
                 }}
               >
                 <div
                   style={{
+                    fontSize: "11px",
+                    color: "#4ade80",
+                    fontWeight: "600",
+                    marginBottom: "8px",
                     display: "flex",
                     alignItems: "center",
-                    gap: "8px",
+                    gap: "6px",
                   }}
                 >
-                  <span style={{ fontSize: "16px" }}>
-                    {getStatusIcon(update.status)}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      color: getStatusColor(update.status),
-                      fontWeight: "600",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    {update.status}
-                  </span>
+                  <CheckCircle size={12} strokeWidth={2.5} />
+                  RESULT:
                 </div>
-                <p
+                <div
                   style={{
-                    marginTop: "4px",
-                    fontSize: "13px",
-                    color: "#d1d5db",
-                    marginLeft: "24px",
+                    fontSize: "12px",
+                    color: "#e5e5e5",
+                    lineHeight: "1.6",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
                   }}
                 >
-                  {update.message}
-                </p>
-                {update.timestamp && (
-                  <p
+                  {result.result || JSON.stringify(result, null, 2)}
+                </div>
+                {result.steps_taken && (
+                  <div
                     style={{
-                      marginTop: "4px",
-                      fontSize: "11px",
-                      color: "#6b7280",
-                      marginLeft: "24px",
+                      marginTop: "8px",
+                      fontSize: "10px",
+                      color: "#888",
                     }}
                   >
-                    {new Date(update.timestamp).toLocaleTimeString()}
-                  </p>
+                    Steps taken: {result.steps_taken}
+                  </div>
                 )}
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+            )}
 
-      {result && (
-        <div className="agent-result">
-          <h4
+            {error && (
+              <div
+                style={{
+                  marginTop: "12px",
+                  paddingTop: "12px",
+                  borderTop: "1px solid #1f1f1f",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "12px",
+                    color: "#f87171",
+                    fontWeight: "600",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <XCircle size={14} strokeWidth={2.5} />
+                  ERROR: {error}
+                </span>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div
+        style={{
+          position: "sticky",
+          bottom: 0,
+          backgroundColor: "#0a0a0a",
+          zIndex: 10,
+        }}
+      >
+        <textarea
+          id="agent-goal"
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          placeholder="What should the agent do?"
+          rows={2}
+          disabled={isExecuting}
+          style={{
+            width: "100%",
+            padding: "10px",
+            borderRadius: "8px 8px 0 0",
+            border: "1px solid #2a2a2a",
+            borderBottom: "none",
+            backgroundColor: "#141414",
+            color: "#e5e5e5",
+            fontSize: "12px",
+            resize: "none",
+            fontFamily: "inherit",
+            boxSizing: "border-box",
+            margin: 0,
+          }}
+        />
+
+        <div style={{ display: "flex", gap: "8px", width: "100%" }}>
+          <button
+            onClick={handleExecute}
+            disabled={isExecuting || !wsConnected}
             style={{
-              marginBottom: "12px",
-              fontSize: "14px",
-              fontWeight: "600",
+              flex: 1,
+              padding: "10px",
+              backgroundColor: isExecuting
+                ? "#0f0f0f"
+                : wsConnected
+                ? "#1f1f1f"
+                : "#141414",
+              color: wsConnected ? "#ffffff" : "#666666",
+              border: "1px solid #2a2a2a",
+              borderTop: "none",
+              borderRadius: isExecuting ? "0" : "0 0 0 8px",
+              fontSize: "12px",
+              fontWeight: "500",
+              cursor: isExecuting || !wsConnected ? "not-allowed" : "pointer",
+              transition: "all 0.15s",
+              boxSizing: "border-box",
             }}
           >
-            ✨ Result
-          </h4>
-          <div
-            style={{
-              backgroundColor: "#065f46",
-              borderRadius: "8px",
-              padding: "12px",
-              border: "1px solid #10b981",
-            }}
-          >
-            <pre
+            {isExecuting ? (
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  justifyContent: "center",
+                }}
+              >
+                <Clock size={14} strokeWidth={2.5} />
+                Working...
+              </span>
+            ) : (
+              "Execute"
+            )}
+          </button>
+
+          {isExecuting && (
+            <button
+              onClick={handleStop}
               style={{
-                margin: 0,
+                padding: "10px 16px",
+                backgroundColor: "#7f1d1d",
+                color: "#ffffff",
+                border: "1px solid #991b1b",
+                borderTop: "none",
+                borderRadius: "0 0 8px 0",
                 fontSize: "12px",
-                color: "#d1fae5",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
+                fontWeight: "500",
+                cursor: "pointer",
+                transition: "all 0.15s",
+                boxSizing: "border-box",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "#991b1b";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "#7f1d1d";
               }}
             >
-              {JSON.stringify(result, null, 2)}
-            </pre>
-          </div>
+              <StopCircle size={14} strokeWidth={2.5} />
+              Stop
+            </button>
+          )}
         </div>
-      )}
-
-      {error && (
-        <div
-          style={{
-            marginTop: "12px",
-            padding: "12px",
-            backgroundColor: "#7f1d1d",
-            borderRadius: "8px",
-            border: "1px solid #dc2626",
-          }}
-        >
-          <p style={{ margin: 0, fontSize: "13px", color: "#fecaca" }}>
-            ❌ {error}
-          </p>
-        </div>
-      )}
+      </div>
 
       <style>{`
-        .agent-executor {
-          padding: 16px;
-          background-color: #111827;
-          border-radius: 12px;
-          margin-bottom: 20px;
+        .agent-executor-fixed {
+          position: fixed;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          padding: 0;
+          background-color: #0a0a0a;
+          box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.5);
+          z-index: 1000;
+          border-top: 1px solid #1f1f1f;
+          height: calc(100vh - 52px);
+          max-height: calc(100vh - 52px);
+          display: flex;
+          flex-direction: column;
         }
 
-        .section-header {
-          margin-bottom: 16px;
+        .agent-executor-fixed > div:first-child::-webkit-scrollbar {
+          width: 6px;
         }
 
-        .section-header h3 {
-          margin: 0;
-          font-size: 18px;
-          font-weight: 700;
-          color: #f3f4f6;
+        .agent-executor-fixed > div:first-child::-webkit-scrollbar-track {
+          background: transparent;
         }
 
-        .section-description {
-          margin: 4px 0 0 0;
-          font-size: 13px;
-          color: #9ca3af;
+        .agent-executor-fixed > div:first-child::-webkit-scrollbar-thumb {
+          background: #2a2a2a;
+          border-radius: 3px;
         }
 
-        .agent-input-section {
-          margin-bottom: 20px;
-        }
-
-        .agent-input-section label {
-          display: block;
-          margin-bottom: 8px;
-          font-size: 14px;
-          font-weight: 600;
-          color: #d1d5db;
-        }
-
-        .example-goals {
-          margin-top: 12px;
-        }
-
-        .agent-progress,
-        .agent-result {
-          margin-top: 20px;
-        }
-
-        .agent-progress h4,
-        .agent-result h4 {
-          color: #f3f4f6;
+        .agent-executor-fixed > div:first-child::-webkit-scrollbar-thumb:hover {
+          background: #3a3a3a;
         }
       `}</style>
     </div>

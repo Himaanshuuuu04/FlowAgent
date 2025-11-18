@@ -10,14 +10,98 @@ const SERVER_URL = "http://localhost:8080";
 export class WebSocketClient {
   private socket: Socket | null = null;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
+  private maxReconnectAttempts = 10;
   private reconnectDelay = 1000; // Start with 1 second
   private isConnected = false;
   private eventHandlers: Map<string, Function[]> = new Map();
   private pingInterval: NodeJS.Timeout | null = null;
+  private autoConnectEnabled = true;
+  private autoConnectInterval: NodeJS.Timeout | null = null;
+  private isManuallyDisconnected = false;
 
   constructor() {
-    this.connect();
+    this.loadAutoConnectPreference();
+    if (this.autoConnectEnabled) {
+      this.connect();
+      this.startAutoConnectMonitor();
+    }
+  }
+
+  /**
+   * Load auto-connect preference from storage
+   */
+  private async loadAutoConnectPreference(): Promise<void> {
+    try {
+      const result = await browser.storage.local.get("wsAutoConnect");
+      this.autoConnectEnabled = result.wsAutoConnect !== false; // Default to true
+    } catch (error) {
+      console.log("Could not load auto-connect preference:", error);
+      this.autoConnectEnabled = true;
+    }
+  }
+
+  /**
+   * Save auto-connect preference to storage
+   */
+  private async saveAutoConnectPreference(): Promise<void> {
+    try {
+      await browser.storage.local.set({
+        wsAutoConnect: this.autoConnectEnabled,
+      });
+    } catch (error) {
+      console.log("Could not save auto-connect preference:", error);
+    }
+  }
+
+  /**
+   * Start monitoring connection and auto-reconnect if enabled
+   */
+  private startAutoConnectMonitor(): void {
+    if (this.autoConnectInterval) {
+      clearInterval(this.autoConnectInterval);
+    }
+
+    this.autoConnectInterval = setInterval(() => {
+      if (
+        this.autoConnectEnabled &&
+        !this.isConnected &&
+        !this.isManuallyDisconnected
+      ) {
+        console.log("🔄 Auto-connect: Attempting to reconnect...");
+        this.connect();
+      }
+    }, 10000); // Check every 10 seconds
+  }
+
+  /**
+   * Stop auto-connect monitoring
+   */
+  private stopAutoConnectMonitor(): void {
+    if (this.autoConnectInterval) {
+      clearInterval(this.autoConnectInterval);
+      this.autoConnectInterval = null;
+    }
+  }
+
+  /**
+   * Enable auto-connect
+   */
+  enableAutoConnect(): void {
+    this.autoConnectEnabled = true;
+    this.saveAutoConnectPreference();
+    this.startAutoConnectMonitor();
+    if (!this.isConnected) {
+      this.connect();
+    }
+  }
+
+  /**
+   * Disable auto-connect
+   */
+  disableAutoConnect(): void {
+    this.autoConnectEnabled = false;
+    this.saveAutoConnectPreference();
+    this.stopAutoConnectMonitor();
   }
 
   /**
@@ -29,6 +113,7 @@ export class WebSocketClient {
       return;
     }
 
+    this.isManuallyDisconnected = false;
     console.log("Connecting to WebSocket server...", SERVER_URL);
 
     this.socket = io(SERVER_URL, {
@@ -458,6 +543,7 @@ export class WebSocketClient {
         this.socket?.off("agent_progress", progressHandler);
         this.socket?.off("agent_completed", successHandler);
         this.socket?.off("agent_error", errorHandler);
+        this.socket?.off("agent_stopped", stoppedHandler);
         resolve(data);
       };
 
@@ -465,12 +551,22 @@ export class WebSocketClient {
         this.socket?.off("agent_progress", progressHandler);
         this.socket?.off("agent_completed", successHandler);
         this.socket?.off("agent_error", errorHandler);
+        this.socket?.off("agent_stopped", stoppedHandler);
         reject(new Error(data.error || "Unknown error"));
+      };
+
+      const stoppedHandler = (data: any) => {
+        this.socket?.off("agent_progress", progressHandler);
+        this.socket?.off("agent_completed", successHandler);
+        this.socket?.off("agent_error", errorHandler);
+        this.socket?.off("agent_stopped", stoppedHandler);
+        reject(new Error("Agent execution stopped by user"));
       };
 
       this.socket.on("agent_progress", progressHandler);
       this.socket.on("agent_completed", successHandler);
       this.socket.on("agent_error", errorHandler);
+      this.socket.on("agent_stopped", stoppedHandler);
 
       // Send agent execution request
       this.socket.emit("execute_agent_ws", { goal });
@@ -480,8 +576,44 @@ export class WebSocketClient {
         this.socket?.off("agent_progress", progressHandler);
         this.socket?.off("agent_completed", successHandler);
         this.socket?.off("agent_error", errorHandler);
+        this.socket?.off("agent_stopped", stoppedHandler);
         reject(new Error("Agent execution timeout"));
       }, 300000);
+    });
+  }
+
+  /**
+   * Stop the currently running agent execution
+   */
+  async stopAgent(): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        reject(new Error("WebSocket not connected"));
+        return;
+      }
+
+      const successHandler = (data: any) => {
+        this.socket?.off("agent_stopped", successHandler);
+        this.socket?.off("agent_error", errorHandler);
+        resolve(data);
+      };
+
+      const errorHandler = (data: any) => {
+        this.socket?.off("agent_stopped", successHandler);
+        this.socket?.off("agent_error", errorHandler);
+        reject(new Error(data.error || "Unknown error"));
+      };
+
+      this.socket.on("agent_stopped", successHandler);
+      this.socket.on("agent_error", errorHandler);
+
+      this.socket.emit("stop_agent_ws", {});
+
+      setTimeout(() => {
+        this.socket?.off("agent_stopped", successHandler);
+        this.socket?.off("agent_error", errorHandler);
+        reject(new Error("Stop request timeout"));
+      }, 5000);
     });
   }
 
@@ -497,6 +629,7 @@ export class WebSocketClient {
    */
   disconnect(): void {
     console.log("Disconnecting WebSocket...");
+    this.isManuallyDisconnected = true;
     this.stopPingInterval();
     this.socket?.disconnect();
     this.isConnected = false;
