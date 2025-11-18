@@ -52,3 +52,19 @@ tmp/
 cache/
 .history/
 ./venv
+# Explicit .env file exclusions
+**/.env
+Extension/.env
+himanshu/.env
+himanshu/agents/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv
