@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
+import { wsClient } from "../../utils/websocket-client";
 
-const BACKEND_URL = "http://localhost:5000";
+const BACKEND_URL = "http://localhost:8080";
 
 export const getBrowserInfo = () => {
   const ua = navigator.userAgent || "";
@@ -168,6 +169,16 @@ export function useAuth() {
       await browser.storage.local.set({ googleUser: fullUserData });
       setUser(fullUserData);
       setTokenStatus("✅ Token valid (with auto-refresh)");
+
+      // Send Google access token to WebSocket server for agent tools
+      if (wsClient.isSocketConnected()) {
+        try {
+          await wsClient.setGoogleToken(token);
+          console.log("✅ Google token sent to agent backend");
+        } catch (error) {
+          console.warn("⚠️ Could not send Google token to backend:", error);
+        }
+      }
     } catch (err: any) {
       console.error("Auth Error:", err);
       if (

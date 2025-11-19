@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Settings,
   Brain,
@@ -10,6 +10,7 @@ import {
   StopCircle,
 } from "lucide-react";
 import { wsClient } from "../utils/websocket-client";
+import { marked } from "marked";
 
 interface AgentExecutorProps {
   wsConnected: boolean;
@@ -19,6 +20,10 @@ interface ProgressUpdate {
   status: string;
   message: string;
   timestamp?: string;
+  step?: number;
+  node?: string;
+  tools?: string[];
+  content?: string;
 }
 
 export function AgentExecutor({ wsConnected }: AgentExecutorProps) {
@@ -27,6 +32,22 @@ export function AgentExecutor({ wsConnected }: AgentExecutorProps) {
   const [progress, setProgress] = useState<ProgressUpdate[]>([]);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Configure marked options
+  marked.setOptions({
+    breaks: true,
+    gfm: true,
+  });
+
+  // Render markdown to HTML
+  const renderMarkdown = (markdown: string) => {
+    try {
+      return marked.parse(markdown);
+    } catch (err) {
+      console.error("Markdown parsing error:", err);
+      return markdown;
+    }
+  };
 
   const handleExecute = async () => {
     if (!goal.trim()) {
@@ -52,6 +73,10 @@ export function AgentExecutor({ wsConnected }: AgentExecutorProps) {
             status: progressData.status,
             message: progressData.message,
             timestamp: new Date().toISOString(),
+            step: progressData.step,
+            node: progressData.node,
+            tools: progressData.tools,
+            content: progressData.content,
           },
         ]);
       });
@@ -123,7 +148,10 @@ export function AgentExecutor({ wsConnected }: AgentExecutorProps) {
       case "planning":
         return <Brain {...iconProps} />;
       case "executing":
+      case "tool_calling":
         return <Wrench {...iconProps} />;
+      case "responding":
+        return <FileText {...iconProps} />;
       case "completed":
         return <CheckCircle {...iconProps} />;
       case "error":
@@ -141,6 +169,10 @@ export function AgentExecutor({ wsConnected }: AgentExecutorProps) {
         return "#a78bfa";
       case "executing":
         return "#fbbf24";
+      case "tool_calling":
+        return "#f97316";
+      case "responding":
+        return "#22d3ee";
       case "completed":
         return "#34d399";
       case "error":
@@ -259,133 +291,134 @@ export function AgentExecutor({ wsConnected }: AgentExecutorProps) {
           </div>
         ) : (
           <>
+            {/* Progress Section - Minimalistic */}
             {progress.length > 0 && (
-              <div>
+              <div style={{ marginBottom: "12px" }}>
                 {progress.map((update, index) => (
                   <div
                     key={index}
                     style={{
-                      marginBottom: "8px",
-                      fontSize: "12px",
-                      lineHeight: "1.6",
+                      marginBottom: "6px",
+                      fontSize: "11px",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "8px",
+                      opacity: index === progress.length - 1 ? 1 : 0.5,
+                      transition: "opacity 0.3s ease",
                     }}
                   >
-                    <div
+                    <span
                       style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "6px",
-                        marginBottom: "2px",
+                        color: getStatusColor(update.status),
+                        marginTop: "2px",
+                        flexShrink: 0,
                       }}
                     >
-                      <span
+                      {getStatusIcon(update.status)}
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
                         style={{
-                          display: "flex",
-                          color: getStatusColor(update.status),
+                          color: "#aaa",
+                          wordBreak: "break-word",
                         }}
                       >
-                        {getStatusIcon(update.status)}
-                      </span>
-                      <span
-                        style={{
-                          color: getStatusColor(update.status),
-                          fontWeight: "600",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {update.status.toUpperCase()}
-                      </span>
-                      {update.timestamp && (
-                        <span
+                        {update.message}
+                      </div>
+                      {update.tools && update.tools.length > 0 && (
+                        <div
                           style={{
-                            fontSize: "10px",
-                            color: "#666666",
+                            marginTop: "3px",
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "3px",
                           }}
                         >
-                          {new Date(update.timestamp).toLocaleTimeString()}
-                        </span>
+                          {update.tools.map((tool, i) => (
+                            <span
+                              key={i}
+                              style={{
+                                fontSize: "9px",
+                                padding: "1px 5px",
+                                backgroundColor: "rgba(251, 191, 36, 0.1)",
+                                color: "#fbbf24",
+                                borderRadius: "2px",
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {tool}
+                            </span>
+                          ))}
+                        </div>
                       )}
                     </div>
-                    <div
-                      style={{
-                        color: "#e5e5e5",
-                        paddingLeft: "20px",
-                      }}
-                    >
-                      {update.message}
-                    </div>
+                    {update.step && (
+                      <span
+                        style={{
+                          fontSize: "9px",
+                          color: "#555",
+                          fontFamily: "monospace",
+                          flexShrink: 0,
+                        }}
+                      >
+                        #{update.step}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
             )}
 
+            {/* Result Section - Minimalistic */}
             {result && (
               <div
                 style={{
-                  marginTop: "12px",
+                  marginTop: "16px",
                   paddingTop: "12px",
-                  borderTop: "1px solid #1f1f1f",
+                  borderTop: "1px solid #1a1a1a",
                 }}
               >
                 <div
+                  className="markdown-content"
                   style={{
-                    fontSize: "11px",
-                    color: "#4ade80",
-                    fontWeight: "600",
-                    marginBottom: "8px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                  }}
-                >
-                  <CheckCircle size={12} strokeWidth={2.5} />
-                  RESULT:
-                </div>
-                <div
-                  style={{
-                    fontSize: "12px",
+                    fontSize: "13px",
                     color: "#e5e5e5",
-                    lineHeight: "1.6",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
+                    lineHeight: "1.7",
                   }}
-                >
-                  {result.result || JSON.stringify(result, null, 2)}
-                </div>
-                {result.steps_taken && (
-                  <div
-                    style={{
-                      marginTop: "8px",
-                      fontSize: "10px",
-                      color: "#888",
-                    }}
-                  >
-                    Steps taken: {result.steps_taken}
-                  </div>
-                )}
+                  dangerouslySetInnerHTML={{
+                    __html: renderMarkdown(
+                      result.result || JSON.stringify(result, null, 2)
+                    ),
+                  }}
+                />
               </div>
             )}
 
+            {/* Error Section - Minimalistic */}
             {error && (
               <div
                 style={{
                   marginTop: "12px",
                   paddingTop: "12px",
-                  borderTop: "1px solid #1f1f1f",
+                  borderTop: "1px solid #1a1a1a",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "8px",
                 }}
               >
+                <XCircle
+                  size={14}
+                  strokeWidth={2}
+                  style={{ color: "#f87171", flexShrink: 0, marginTop: "2px" }}
+                />
                 <span
                   style={{
                     fontSize: "12px",
                     color: "#f87171",
-                    fontWeight: "600",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
+                    lineHeight: "1.5",
                   }}
                 >
-                  <XCircle size={14} strokeWidth={2.5} />
-                  ERROR: {error}
+                  {error}
                 </span>
               </div>
             )}

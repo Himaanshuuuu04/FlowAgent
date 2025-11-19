@@ -1,0 +1,756 @@
+"""
+Deep Agent for browser automation with planning and context management capabilities.
+
+This agent uses the deepagents library which provides:
+- Planning: write_todos tool for task decomposition
+- Context management: ls, read_file, write_file, edit_file for handling large contexts
+- Subagent spawning: task tool for delegating specialized work
+- All existing browser automation and Google API tools
+"""
+
+from deepagents import create_deep_agent
+from langchain_groq import ChatGroq
+from dotenv import load_dotenv
+from langchain_core.tools import tool
+from typing import Dict, Any, Optional, List, Union
+import json
+import os   
+import asyncio
+import logging
+
+# Import Google tools
+from .google_tools import google_tools, set_google_access_token
+
+# Import DOM analyzer sub-agent
+from .dom_analyzer_agent import dom_analyzer, set_websocket_callback as set_dom_analyzer_callback
+
+# Import specialized subagents
+from .page_analysis_subagent import page_analysis_subagent
+from .interaction_subagent import interaction_subagent
+from .navigation_subagent import navigation_subagent
+from .data_utility_subagent import data_utility_subagent
+from .timing_subagent import timing_subagent
+
+# Import shared subagent utilities
+from . import subagent_utils
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+load_dotenv()
+api_key = os.getenv("GROQ_API_KEY")
+os.environ["LANGSMITH_TRACING"] = "true"
+os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
+langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
+langsmith_project = os.getenv("LANGSMITH_PROJECT")
+if langsmith_api_key:
+    os.environ["LANGSMITH_API_KEY"] = langsmith_api_key
+if langsmith_project:
+    os.environ["LANGSMITH_PROJECT"] = langsmith_project
+
+# Use Groq's model for main agent
+llm = ChatGroq(
+    api_key=api_key,  # type: ignore
+    model="openai/gpt-oss-120b",
+    temperature=0.2,
+)
+
+# Global variable to store WebSocket communication callback
+_websocket_callback = None
+
+def set_websocket_callback(callback):
+    """Set the callback function for WebSocket communication with the extension"""
+    global _websocket_callback
+    _websocket_callback = callback
+    # Also set callback for DOM analyzer sub-agent
+    set_dom_analyzer_callback(callback)
+    # Set callback for all specialized subagents via shared utils
+    subagent_utils.set_websocket_callback(callback)
+    logger.info(f"✅ WebSocket callback set successfully for main agent, DOM analyzer, and all specialized subagents")
+
+async def execute_browser_action(action_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a browser action via WebSocket and wait for response"""
+    logger.info(f"\n{'='*60}")
+    logger.info(f"🔨 EXECUTE_BROWSER_ACTION CALLED")
+    logger.info(f"Action Type: {action_type}")
+    logger.info(f"Params: {json.dumps(params, indent=2)}")
+    logger.info(f"WebSocket callback set: {_websocket_callback is not None}")
+    logger.info(f"{'='*60}\n")
+    
+    if _websocket_callback is None:
+        logger.error("❌ WebSocket callback not set!")
+        return {"success": False, "error": "WebSocket not connected"}
+    
+    try:
+        logger.info(f"📞 Calling WebSocket callback...")
+        result = await _websocket_callback(action_type, params)
+        logger.info(f"✅ WebSocket callback returned")
+        logger.info(f"Result: {json.dumps(result, indent=2) if isinstance(result, dict) else str(result)[:200]}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error in execute_browser_action: {str(e)}")
+        import traceback
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
+        return {"success": False, "error": str(e)}
+
+# =================================================================
+# DOM ANALYZER SUB-AGENT TOOL
+# =================================================================
+
+@tool
+def analyze_page_with_dom_expert(analysis_request: str) -> str:
+    """
+    Invoke the specialized DOM analyzer sub-agent to analyze the current page.
+    
+    Args:
+        analysis_request: Describe what you need to know about the page.
+                         Examples:
+                         - "What interactive elements are on this page?"
+                         - "Find all forms and their input fields"
+                         - "Identify the main navigation structure"
+                         - "Extract all clickable buttons and their purposes"
+                         - "Analyze the page structure and suggest next actions"
+    
+    Returns:
+        Detailed analysis from the DOM expert including:
+        - Page overview and structure
+        - Interactive elements with selectors
+        - Content organization
+        - Recommended actions
+    
+    Use this tool when you need expert analysis of the page structure before taking actions.
+    The DOM analyzer specializes in understanding web pages and will provide targeted insights.
+    """
+    try:
+        logger.info(f"🔍 Calling DOM analyzer sub-agent with request: {analysis_request[:100]}...")
+        result = dom_analyzer.invoke({
+            "messages": [{"role": "user", "content": analysis_request}]
+        })
+        response = result["messages"][-1].content
+        logger.info(f"✅ DOM analyzer returned {len(response)} chars")
+        return response
+    except Exception as e:
+        logger.error(f"❌ Error calling DOM analyzer: {str(e)}")
+        return json.dumps({"success": False, "error": str(e)})
+
+# =================================================================
+# PAGE ANALYSIS TOOLS
+# =================================================================
+
+@tool
+def get_page_info() -> str:
+    """
+    Get current page info (title, url, simplified DOM structure).
+    Returns essential page information and available interactive elements.
+    
+    Use this as your first step to understand what's on the page.
+    The DOM includes clickable elements, forms, and interactive components.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("GET_PAGE_INFO", {}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def extract_dom_structure(selector: str = "body", max_depth: int = 5) -> str:
+    """
+    Extract detailed DOM structure from a specific element.
+    
+    Args:
+        selector: CSS selector of root element (default: "body")
+        max_depth: Maximum depth to traverse (default: 5)
+        
+    Returns:
+        Hierarchical structure with element types, classes, IDs, and text
+    
+    Use this when you need detailed information about page structure.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("EXTRACT_DOM_STRUCTURE", {
+            "selector": selector,
+            "max_depth": max_depth
+        }))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+# =================================================================
+# INTERACTION TOOLS
+# =================================================================
+
+@tool
+def click_element(selector: str) -> str:
+    """
+    Click an element using CSS selector.
+    
+    Args:
+        selector: CSS selector of the element to click
+        
+    Returns:
+        Success status
+    
+    Works with buttons, links, and any clickable element.
+    Always wait for the element to be ready before clicking.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("CLICK_ELEMENT", {"selector": selector}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def type_text(selector: str, text: str, clear: bool = True, delay: int = 50) -> str:
+    """
+    Type text into an input element.
+    
+    Args:
+        selector: CSS selector of the input
+        text: Text to type
+        clear: Whether to clear existing text first (default: True)
+        delay: Delay between keystrokes in ms (default: 50)
+        
+    Returns:
+        Success status
+    
+    Use for text inputs, textareas, search boxes, etc.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("TYPE_TEXT", {
+            "selector": selector,
+            "text": text,
+            "clear": clear,
+            "delay": delay
+        }))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def fill_form_fields(fields: List[Dict[str, str]]) -> str:
+    """
+    Fill multiple form fields at once.
+    
+    Args:
+        fields: List of {selector, value} objects
+                Example: [{"selector": "#email", "value": "test@example.com"}]
+    
+    Returns:
+        Success status with details for each field
+    
+    Efficient for forms with multiple inputs.
+    Each field is validated before filling.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("FILL_FORM_FIELDS", {"fields": fields}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def select_dropdown_option(selector: str, value: str) -> str:
+    """
+    Select an option from a dropdown.
+    
+    Args:
+        selector: CSS selector of the <select> element
+        value: Option value to select
+        
+    Returns:
+        Success status
+    
+    Works with standard HTML select elements.
+    Value should match the option's value attribute.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("SELECT_DROPDOWN_OPTION", {
+            "selector": selector,
+            "value": value
+        }))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def hover_element(selector: str) -> str:
+    """
+    Hover over an element to reveal hidden content.
+    
+    Args:
+        selector: CSS selector of the element
+        
+    Returns:
+        Success status
+    
+    Useful for dropdown menus, tooltips, and hover interactions.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("HOVER_ELEMENT", {"selector": selector}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+# =================================================================
+# NAVIGATION TOOLS
+# =================================================================
+
+@tool
+def navigate_to_url(url: str) -> str:
+    """
+    Navigate to a URL in the current tab.
+    
+    Args:
+        url: Full URL to navigate to (must include http:// or https://)
+        
+    Returns:
+        Success status with new page info
+    
+    Waits for the page to load before returning.
+    Use get_page_info() after navigation to see what's on the new page.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("NAVIGATE_TO_URL", {"url": url}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def open_new_tab(url: Optional[str] = None) -> str:
+    """
+    Open a new browser tab, optionally navigating to a URL.
+    
+    Args:
+        url: URL to navigate to in new tab (optional)
+        
+    Returns:
+        Success status with new tab ID
+    
+    The new tab becomes the active tab.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("OPEN_NEW_TAB", {"url": url}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def close_current_tab() -> str:
+    """
+    Close the currently active tab.
+    
+    Returns:
+        Success status
+    
+    Switches to another tab after closing.
+    Cannot close if it's the last tab.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("CLOSE_CURRENT_TAB", {}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def switch_tab(tab_id: int) -> str:
+    """
+    Switch to a specific browser tab.
+    
+    Args:
+        tab_id: ID of the tab to switch to (get from get_all_tabs)
+        
+    Returns:
+        Success status with new tab info
+    
+    Use get_all_tabs() first to see available tabs.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("SWITCH_TAB", {"tab_id": tab_id}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def get_all_tabs() -> str:
+    """
+    Get information about all open browser tabs.
+    
+    Returns:
+        List of tabs with id, title, url, and active status
+    
+    Use this to see all available tabs before switching.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("GET_ALL_TABS", {}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def reload_page() -> str:
+    """
+    Reload the current page.
+    
+    Returns:
+        Success status
+    
+    Waits for the page to reload before returning.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("RELOAD_PAGE", {}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def go_back() -> str:
+    """
+    Navigate back in browser history.
+    
+    Returns:
+        Success status
+    """
+    try:
+        result = asyncio.run(execute_browser_action("GO_BACK", {}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def go_forward() -> str:
+    """
+    Navigate forward in browser history.
+    
+    Returns:
+        Success status
+    """
+    try:
+        result = asyncio.run(execute_browser_action("GO_FORWARD", {}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+# =================================================================
+# DATA & UTILITY TOOLS
+# =================================================================
+
+@tool
+def take_screenshot() -> str:
+    """
+    Capture a screenshot of the current page.
+    
+    Returns:
+        Base64-encoded image data
+    
+    Useful for debugging or capturing page state.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("TAKE_SCREENSHOT", {}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def get_element_text(selector: str) -> str:
+    """
+    Get the text content of an element.
+    
+    Args:
+        selector: CSS selector of the element
+        
+    Returns:
+        Text content of the element
+    
+    Extracts visible text from the element and its children.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("GET_ELEMENT_TEXT", {"selector": selector}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def get_element_attributes(selector: str, attributes: Optional[List[str]] = None) -> str:
+    """
+    Get attributes of an element.
+    
+    Args:
+        selector: CSS selector of the element
+        attributes: List of attribute names to get (optional, gets all if not specified)
+        
+    Returns:
+        Object with attribute name-value pairs
+    
+    Use to inspect element properties like href, src, class, id, etc.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("GET_ELEMENT_ATTRIBUTES", {
+            "selector": selector,
+            "attributes": attributes
+        }))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def execute_javascript(code: str) -> str:
+    """
+    Execute JavaScript code on the page.
+    
+    Args:
+        code: JavaScript code to execute
+        
+    Returns:
+        Result of the execution
+    
+    WARNING: Use with caution. For advanced scenarios only.
+    Prefer specific tools when available.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("EXECUTE_JAVASCRIPT", {"code": code}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def get_local_storage(key: Optional[str] = None) -> str:
+    """
+    Get data from browser local storage.
+    
+    Args:
+        key: Specific key to get (optional, gets all if not specified)
+        
+    Returns:
+        Storage data
+    
+    Access persistent browser data storage.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("GET_LOCAL_STORAGE", {"key": key}))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def set_local_storage(key: str, value: str) -> str:
+    """
+    Set data in browser local storage.
+    
+    Args:
+        key: Storage key
+        value: Value to store
+        
+    Returns:
+        Success status
+    
+    Store persistent data in the browser.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("SET_LOCAL_STORAGE", {
+            "key": key,
+            "value": value
+        }))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+# =================================================================
+# TIMING & WAITING TOOLS
+# =================================================================
+
+@tool
+def wait_for_element(selector: str, timeout: int = 5000) -> str:
+    """
+    Wait for an element to appear on the page.
+    
+    Args:
+        selector: CSS selector to wait for
+        timeout: Maximum wait time in milliseconds (default: 5000)
+        
+    Returns:
+        Success status when element appears
+    
+    CRITICAL: Use after actions that trigger page changes or new content.
+    Always wait before trying to interact with dynamically loaded elements.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("WAIT_FOR_ELEMENT", {
+            "selector": selector,
+            "timeout": timeout
+        }))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def scroll_page(direction: str = "down", amount: int = 500) -> str:
+    """
+    Scroll the page.
+    
+    Args:
+        direction: "up" or "down" (default: "down")
+        amount: Pixels to scroll (default: 500)
+        
+    Returns:
+        Success status
+    
+    Use to reveal content below/above the viewport.
+    Useful for infinite scroll pages or long content.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("SCROLL_PAGE", {
+            "direction": direction,
+            "amount": amount
+        }))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@tool
+def find_elements(selector: str, filter_visible: bool = True) -> str:
+    """
+    Find all matching elements on the page.
+    
+    Args:
+        selector: CSS selector to search for
+        filter_visible: Only return visible elements (default: True)
+        
+    Returns:
+        JSON array with information about matching elements
+    
+    Use this to discover multiple instances of elements.
+    """
+    try:
+        result = asyncio.run(execute_browser_action("FIND_ELEMENTS", {
+            "selector": selector,
+            "filter_visible": filter_visible
+        }))
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+# =================================================================
+# SYSTEM PROMPT FOR DEEP AGENT
+# =================================================================
+
+DEEP_AGENT_SYSTEM_PROMPT = """You are an advanced web automation AI agent with comprehensive browser control, planning capabilities, and access to specialized tools.
+
+CORE CAPABILITIES:
+1. PLANNING: Use write_todos to break complex tasks into manageable steps
+2. CONTEXT MANAGEMENT: Use file system tools (ls, read_file, write_file, edit_file) for large data
+3. SUBAGENT SPAWNING: Use task tool to delegate specialized work
+4. BROWSER AUTOMATION: 30+ tools for web interaction
+5. DOM ANALYSIS: Specialized sub-agent for page structure understanding
+
+BUILT-IN DEEP AGENT TOOLS (automatically available):
+- write_todos: Create/update task list for complex workflows
+- ls: List files in agent's filesystem
+- read_file: Read file contents for context
+- write_file: Save data to files
+- edit_file: Modify existing files
+- task: Spawn subagent for specialized tasks
+
+BROWSER AUTOMATION TOOLS:
+- DOM Expert: analyze_page_with_dom_expert (use FIRST for complex pages)
+- Page Analysis: get_page_info, extract_dom_structure, find_elements, get_element_text, take_screenshot
+- Interactions: click_element, type_text, fill_form_fields, select_dropdown_option, hover_element
+- Navigation: open_new_tab, switch_tab, navigate_to_url, go_back, reload_page, close_current_tab
+- Data: get_local_storage, set_local_storage, execute_javascript, get_element_attributes
+- Timing: wait_for_element, scroll_page
+- Google: get_user_info, get_calendar_events, get_latest_emails, search_emails
+
+WORKFLOW FOR COMPLEX TASKS:
+1. Break down request: Use write_todos to create step-by-step plan
+2. Analyze page: Call analyze_page_with_dom_expert for complex pages
+3. Save large data: Write DOM/response data to files if > 1000 chars
+4. Delegate work: Use task tool for independent subtasks
+5. Execute systematically: Follow todos, validate each step
+6. Manage context: Read from files to recall saved information
+
+WHEN TO USE DEEP AGENT FEATURES:
+✓ Complex multi-step workflows → write_todos
+✓ Large API responses or DOM data → write_file, read_file
+✓ Need to remember data across steps → write_file
+✓ Independent subtask (e.g., "research X") → task tool
+✓ Need to track progress → write_todos
+✗ Simple single-step tasks → just use browser tools
+
+WHEN TO USE DOM EXPERT:
+✓ First time visiting complex website
+✓ Need to find specific interactive elements
+✓ Analyzing forms or multi-step workflows
+✓ Unsure what actions are possible
+✗ Simple tasks like "go to URL" or "take screenshot"
+
+BEST PRACTICES:
+✓ Parse JSON results: data = json.loads(result)
+✓ Check success: if data.get("success")
+✓ Wait after clicks: wait_for_element(selector, timeout=5000)
+✓ Use specific selectors from page analysis
+✓ Verify each step before proceeding
+✓ Save large data to files
+✓ Update todos as you complete steps
+✗ Don't assume elements exist without checking
+✗ Don't skip wait times after page changes
+✗ Don't ignore tool errors
+✗ Don't keep large data in memory
+
+EXAMPLE: Complex Task Flow
+User: "Research competitor pricing from 3 websites and create a comparison"
+
+1. write_todos: ["Visit site 1", "Extract pricing", "Save to file", "Visit site 2", ...]
+2. navigate_to_url: "https://competitor1.com"
+3. analyze_page_with_dom_expert: "Find pricing information and tables"
+4. write_file: Save extracted pricing to "competitor1_pricing.json"
+5. navigate_to_url: "https://competitor2.com"
+6. ... (repeat for other sites)
+7. read_file: Load all saved pricing data
+8. task: "Create comparison table from this data: ..." (delegate analysis)
+
+Execute methodically with planning, validate each step, manage context efficiently, provide clear feedback."""
+
+# Collect all tools
+tools = [
+    # DOM Analysis Sub-Agent
+    analyze_page_with_dom_expert,
+    # Page Analysis
+    get_page_info,
+    extract_dom_structure,
+    find_elements,
+    get_element_text,
+    get_element_attributes,
+    take_screenshot,
+    # Interactions
+    click_element,
+    type_text,
+    fill_form_fields,
+    select_dropdown_option,
+    hover_element,
+    # Navigation
+    navigate_to_url,
+    open_new_tab,
+    close_current_tab,
+    switch_tab,
+    get_all_tabs,
+    reload_page,
+    go_back,
+    go_forward,
+    # Data & Utility
+    execute_javascript,
+    get_local_storage,
+    set_local_storage,
+    # Timing
+    wait_for_element,
+    scroll_page,
+    # Google API tools
+    *google_tools,
+]
+
+# Create deep agent
+agent = create_deep_agent(
+    model=llm,
+    tools=tools,
+    system_prompt=DEEP_AGENT_SYSTEM_PROMPT
+)
+
+logger.info(f"✅ Deep agent created with {len(tools)} custom tools + built-in planning/filesystem/subagent tools")

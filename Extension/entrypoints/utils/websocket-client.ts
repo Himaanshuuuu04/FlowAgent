@@ -18,13 +18,59 @@ export class WebSocketClient {
   private autoConnectEnabled = true;
   private autoConnectInterval: NodeJS.Timeout | null = null;
   private isManuallyDisconnected = false;
+  private userId: string | null = null;
 
   constructor() {
     this.loadAutoConnectPreference();
+    this.initializeUserId();
     if (this.autoConnectEnabled) {
       this.connect();
       this.startAutoConnectMonitor();
     }
+  }
+
+  /**
+   * Generate or retrieve persistent user ID
+   */
+  private async initializeUserId(): Promise<void> {
+    try {
+      const result = await browser.storage.local.get("persistentUserId");
+      if (result.persistentUserId) {
+        this.userId = result.persistentUserId;
+        console.log(
+          "✅ Loaded existing user ID:",
+          this.userId?.substring(0, 8) + "..."
+        );
+      } else {
+        // Generate new persistent user ID
+        this.userId = this.generateUserId();
+        await browser.storage.local.set({ persistentUserId: this.userId });
+        console.log(
+          "✅ Generated new user ID:",
+          this.userId?.substring(0, 8) + "..."
+        );
+      }
+    } catch (error) {
+      console.error("Error initializing user ID:", error);
+      // Fallback to session ID
+      this.userId = this.generateUserId();
+    }
+  }
+
+  /**
+   * Generate unique user ID
+   */
+  private generateUserId(): string {
+    return (
+      "user_" + Date.now() + "_" + Math.random().toString(36).substring(2, 15)
+    );
+  }
+
+  /**
+   * Get the persistent user ID
+   */
+  getUserId(): string | null {
+    return this.userId;
   }
 
   /**
@@ -141,6 +187,16 @@ export class WebSocketClient {
       this.reconnectAttempts = 0;
       this.reconnectDelay = 1000;
       this.startPingInterval();
+
+      // Send persistent user ID to server
+      if (this.userId) {
+        this.socket?.emit("register_user_id", { user_id: this.userId });
+        console.log(
+          "📤 Sent user ID to server:",
+          this.userId.substring(0, 8) + "..."
+        );
+      }
+
       this.emit("connection_status", { connected: true });
     });
 
@@ -518,6 +574,44 @@ export class WebSocketClient {
   }
 
   /**
+   * Set Google access token for agent tools
+   */
+  async setGoogleToken(accessToken: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        reject(new Error("WebSocket not connected"));
+        return;
+      }
+
+      const successHandler = (data: any) => {
+        this.socket?.off("token_set", successHandler);
+        this.socket?.off("token_error", errorHandler);
+        console.log("✅ Google access token set successfully");
+        resolve(data);
+      };
+
+      const errorHandler = (data: any) => {
+        this.socket?.off("token_set", successHandler);
+        this.socket?.off("token_error", errorHandler);
+        console.error("❌ Error setting Google token:", data.error);
+        reject(new Error(data.error || "Unknown error"));
+      };
+
+      this.socket.on("token_set", successHandler);
+      this.socket.on("token_error", errorHandler);
+
+      console.log("📤 Sending Google access token to server...");
+      this.socket.emit("set_google_token", { access_token: accessToken });
+
+      setTimeout(() => {
+        this.socket?.off("token_set", successHandler);
+        this.socket?.off("token_error", errorHandler);
+        reject(new Error("Token set timeout"));
+      }, 5000);
+    });
+  }
+
+  /**
    * Execute AI agent with sophisticated tools
    */
   async executeAgent(
@@ -613,6 +707,82 @@ export class WebSocketClient {
         this.socket?.off("agent_stopped", successHandler);
         this.socket?.off("agent_error", errorHandler);
         reject(new Error("Stop request timeout"));
+      }, 5000);
+    });
+  }
+
+  /**
+   * Clear conversation history
+   */
+  async clearConversationHistory(): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        reject(new Error("WebSocket not connected"));
+        return;
+      }
+
+      const successHandler = (data: any) => {
+        this.socket?.off("conversation_cleared", successHandler);
+        this.socket?.off("clear_error", errorHandler);
+        console.log("✅ Conversation history cleared");
+        resolve(data);
+      };
+
+      const errorHandler = (data: any) => {
+        this.socket?.off("conversation_cleared", successHandler);
+        this.socket?.off("clear_error", errorHandler);
+        console.error("❌ Error clearing conversation history:", data.error);
+        reject(new Error(data.error || "Unknown error"));
+      };
+
+      this.socket.on("conversation_cleared", successHandler);
+      this.socket.on("clear_error", errorHandler);
+
+      console.log("📤 Clearing conversation history...");
+      this.socket.emit("clear_conversation_history");
+
+      setTimeout(() => {
+        this.socket?.off("conversation_cleared", successHandler);
+        this.socket?.off("clear_error", errorHandler);
+        reject(new Error("Clear history timeout"));
+      }, 5000);
+    });
+  }
+
+  /**
+   * Get conversation history
+   */
+  async getConversationHistory(): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        reject(new Error("WebSocket not connected"));
+        return;
+      }
+
+      const successHandler = (data: any) => {
+        this.socket?.off("conversation_history", successHandler);
+        this.socket?.off("history_error", errorHandler);
+        console.log(`📚 Retrieved ${data.count} conversation messages`);
+        resolve(data);
+      };
+
+      const errorHandler = (data: any) => {
+        this.socket?.off("conversation_history", successHandler);
+        this.socket?.off("history_error", errorHandler);
+        console.error("❌ Error getting conversation history:", data.error);
+        reject(new Error(data.error || "Unknown error"));
+      };
+
+      this.socket.on("conversation_history", successHandler);
+      this.socket.on("history_error", errorHandler);
+
+      console.log("📤 Requesting conversation history...");
+      this.socket.emit("get_conversation_history");
+
+      setTimeout(() => {
+        this.socket?.off("conversation_history", successHandler);
+        this.socket?.off("history_error", errorHandler);
+        reject(new Error("Get history timeout"));
       }, 5000);
     });
   }

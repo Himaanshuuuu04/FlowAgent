@@ -2,6 +2,7 @@ flask
 flask-socketio
 flask-cors
 python-dotenv
+deepagents
 langchain
 langchain-groq
 langchain-core
@@ -12,3 +13,5 @@ simple-websocket
 python-socketio
 beautifulsoup4
 lxml
+requests
+tiktoken

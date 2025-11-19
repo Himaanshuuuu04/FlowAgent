@@ -90,7 +90,7 @@ export function SignInScreen({ onLogin, onGitHubLogin }: SignInScreenProps) {
             width: "56px",
             height: "56px",
             margin: "0 auto 16px",
-            background: "linear-gradient(135deg, #4285f4 0%, #8a2be2 100%)",
+            background: "#2a2a2a",
             borderRadius: "18px",
             display: "flex",
             alignItems: "center",
@@ -99,9 +99,18 @@ export function SignInScreen({ onLogin, onGitHubLogin }: SignInScreenProps) {
               "0 8px 32px rgba(66, 133, 244, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05)",
             animation: "pulse 2s ease-in-out infinite",
             position: "relative",
+            overflow: "hidden",
           }}
         >
-          <Zap size={28} color="white" strokeWidth={2.5} />
+          <img
+            src="/logo.png"
+            alt="Open DIA Logo"
+            style={{
+              width: "36px",
+              height: "36px",
+              objectFit: "contain",
+            }}
+          />
           <div
             style={{
               position: "absolute",

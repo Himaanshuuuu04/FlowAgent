@@ -981,6 +981,18 @@ async function executeAgentTool(actionType: string, params: any): Promise<any> {
         console.log("➡️ Calling getElementAttributes");
         return await getElementAttributes(tabId, params);
 
+      case "QUERY_SELECTOR":
+        console.log("➡️ Calling querySemanticElements");
+        return await querySemanticElements(tabId, params);
+
+      case "GET_VISIBLE_ELEMENTS":
+        console.log("➡️ Calling getVisibleElements");
+        return await getVisibleElements(tabId);
+
+      case "GET_TEXT_CONTENT":
+        console.log("➡️ Calling getTextContent");
+        return await getTextContent(tabId, params);
+
       case "EXECUTE_SCRIPT":
         console.log("➡️ Calling executeCustomScript");
         return await executeCustomScript(tabId, params);
@@ -1036,44 +1048,202 @@ async function executeAgentTool(actionType: string, params: any): Promise<any> {
 
 async function getPageInfo(tabId: number, params: any) {
   console.log("📍 getPageInfo called with params:", params);
+  const viewportOnly = params.viewport_only !== false; // Default true
+
   const result = await browser.scripting.executeScript({
     target: { tabId },
-    func: (include_dom: boolean, extract_interactive: boolean) => {
-      const info: any = {
-        url: window.location.href,
-        title: document.title,
-        hasVideo: !!document.querySelector("video"),
-        hasAudio: !!document.querySelector("audio"),
-        hasForm: !!document.querySelector("form"),
-        imageCount: document.querySelectorAll("img").length,
-        linkCount: document.querySelectorAll("a").length,
+    func: (viewportOnly: boolean) => {
+      // Inline semantic DOM extraction (optimized version)
+      const extractSemanticDOM = () => {
+        const elements: any[] = [];
+        const selectors = [
+          "button",
+          "a[href]",
+          "input",
+          "textarea",
+          "select",
+          "form",
+          '[role="button"]',
+          '[role="link"]',
+          "[onclick]",
+          "h1, h2, h3",
+          "img[alt]",
+          "[data-testid]",
+          "[aria-label]",
+        ];
+
+        const scrollX = window.scrollX;
+        const scrollY = window.scrollY;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+
+        const seenElements = new Set<Element>();
+        let idCounter = 0;
+
+        for (const selector of selectors) {
+          try {
+            const matches = document.querySelectorAll(selector);
+            for (const el of matches) {
+              if (seenElements.has(el)) continue;
+              seenElements.add(el);
+
+              const style = window.getComputedStyle(el);
+              if (style.display === "none" || style.visibility === "hidden")
+                continue;
+
+              const rect = el.getBoundingClientRect();
+              if (rect.width === 0 || rect.height === 0) continue;
+
+              const isInViewport =
+                rect.bottom > 0 &&
+                rect.top < viewportHeight &&
+                rect.right > 0 &&
+                rect.left < viewportWidth;
+
+              if (viewportOnly && !isInViewport) continue;
+
+              const htmlEl = el as HTMLElement;
+              elements.push({
+                id: `e${++idCounter}`,
+                role: el.getAttribute("role") || el.tagName.toLowerCase(),
+                tag: el.tagName.toLowerCase(),
+                text: htmlEl.innerText?.trim().substring(0, 100),
+                placeholder: (el as HTMLInputElement).placeholder,
+                ariaLabel: el.getAttribute("aria-label"),
+                value: (el as HTMLInputElement).value,
+                href: (el as HTMLAnchorElement).href,
+                bounds: {
+                  x: Math.round(rect.left + scrollX),
+                  y: Math.round(rect.top + scrollY),
+                  width: Math.round(rect.width),
+                  height: Math.round(rect.height),
+                },
+                selector: el.id
+                  ? `#${el.id}`
+                  : el.getAttribute("data-testid")
+                  ? `[data-testid="${el.getAttribute("data-testid")}"]`
+                  : `${el.tagName.toLowerCase()}:nth-of-type(${
+                      Array.from(el.parentElement?.children || []).indexOf(el) +
+                      1
+                    })`,
+                isInViewport,
+              });
+
+              if (elements.length >= 300) break;
+            }
+            if (elements.length >= 300) break;
+          } catch (e) {}
+        }
+
+        return elements;
       };
 
-      if (extract_interactive) {
-        info.interactive = Array.from(
-          document.querySelectorAll(
-            'button, a, input, textarea, select, [role="button"], [contenteditable="true"]'
-          )
-        )
-          .slice(0, 50)
-          .map((el) => ({
-            tag: el.tagName.toLowerCase(),
-            type: el.getAttribute("type"),
-            id: el.id,
-            class: el.className,
-            name: el.getAttribute("name"),
-            placeholder: el.getAttribute("placeholder"),
-            ariaLabel: el.getAttribute("aria-label"),
-            text: el.textContent?.trim().substring(0, 100),
-          }));
-      }
-
-      return info;
+      return {
+        title: document.title,
+        url: window.location.href,
+        viewport: {
+          width: window.innerWidth,
+          height: window.innerHeight,
+          scrollX: window.scrollX,
+          scrollY: window.scrollY,
+        },
+        elements: extractSemanticDOM(),
+        timestamp: Date.now(),
+      };
     },
-    args: [params.include_dom, params.extract_interactive],
+    args: [viewportOnly],
   });
 
-  return { success: true, data: result[0].result };
+  const data = result[0].result;
+  console.log(
+    `✅ Extracted ${
+      data?.elements?.length || 0
+    } semantic elements (viewport only: ${viewportOnly})`
+  );
+
+  return { success: true, data };
+}
+
+// New query selector tool - allows LLM to query specific elements
+async function querySemanticElements(tabId: number, params: any) {
+  const { selector } = params;
+  console.log(`🔍 Querying semantic elements with selector: ${selector}`);
+
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (selector: string) => {
+      try {
+        const matches = document.querySelectorAll(selector);
+        const elements: any[] = [];
+
+        matches.forEach((el, index) => {
+          const style = window.getComputedStyle(el);
+          if (style.display === "none" || style.visibility === "hidden") return;
+
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) return;
+
+          const htmlEl = el as HTMLElement;
+          elements.push({
+            id: `q${index + 1}`,
+            tag: el.tagName.toLowerCase(),
+            text: htmlEl.innerText?.trim().substring(0, 150),
+            value: (el as HTMLInputElement).value,
+            href: (el as HTMLAnchorElement).href,
+            src: (el as HTMLImageElement).src,
+            ariaLabel: el.getAttribute("aria-label"),
+            selector: el.id ? `#${el.id}` : selector,
+            bounds: {
+              x: Math.round(rect.left + window.scrollX),
+              y: Math.round(rect.top + window.scrollY),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+            },
+          });
+        });
+
+        return { count: elements.length, elements: elements.slice(0, 100) };
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    },
+    args: [selector],
+  });
+
+  const data = result[0].result;
+  return { success: !data.error, data };
+}
+
+// Get only visible elements in current viewport
+async function getVisibleElements(tabId: number) {
+  return await getPageInfo(tabId, { viewport_only: true });
+}
+
+// Get text content of specific selector
+async function getTextContent(tabId: number, params: any) {
+  const { selector } = params;
+
+  const result = await browser.scripting.executeScript({
+    target: { tabId },
+    func: (selector: string) => {
+      try {
+        const element = document.querySelector(selector);
+        return element
+          ? {
+              text: element.textContent?.trim() || "",
+              innerText: (element as HTMLElement).innerText?.trim() || "",
+              value: (element as HTMLInputElement).value || undefined,
+            }
+          : null;
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    },
+    args: [selector],
+  });
+
+  const data = result[0].result;
+  return { success: !!data && !data.error, data };
 }
 
 async function extractDomStructure(tabId: number, params: any) {
