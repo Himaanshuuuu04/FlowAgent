@@ -31,6 +31,13 @@ python -m venv venv
 # Windows: venv\Scripts\activate
 # Mac/Linux: source venv/bin/activate
 pip install -r requirements.txt
+
+# Run the context optimization setup script
+# Windows
+.\scripts\setup_context_optimization.bat
+# Mac/Linux
+bash ./scripts/setup_context_optimization.sh
+
 python server.py
 ```
 > Ensure your `.env` file is configured with your API keys (e.g. `GROQ_API_KEY`). By default, the WebSocket server runs on `http://localhost:5000`.

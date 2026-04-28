@@ -5,7 +5,7 @@ echo "Context Optimization Setup"
 echo "=================================================="
 echo ""
 
-cd "$(dirname "$0")/backend"
+cd "$(dirname "$0")/.."
 
 echo "📦 Installing required dependencies..."
 echo ""
