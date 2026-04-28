@@ -14,7 +14,7 @@ By removing heavy DOM parsing from the server and relying on a custom client-sid
 
 ## 🚀 Quick Start
 
-Ensure you have Python 3.10+ and Node.js 18+ installed.
+Ensure you have Python 3.11+ and Node.js 18+ installed.
 
 ### 1. Launch the Backend Using Docker (Recommended)
 Make sure you have an `.env` file populated under `backend/.env` with your API keys.

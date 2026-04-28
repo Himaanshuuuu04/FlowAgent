@@ -4,7 +4,7 @@ This guide will help you set up and run the AI Browser Extension locally.
 
 ## Prerequisites
 
-- **Python 3.10+**
+- **Python 3.11+**
 - **Node.js 18+**
 - **Google Chrome** or equivalent Chromium-based browser (Edge, Brave)
 - An **API Key** for LLM services (e.g. Groq, Google Gemini API, OpenAI)
