@@ -1,0 +1,17 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-extension-backend
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persist vector DB and SQLite histories to the host machine
+      - ./backend/data:/app/data
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=5000

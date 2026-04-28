@@ -4,7 +4,7 @@ echo Context Optimization Setup
 echo ==================================================
 echo.
 
-cd /d "%~dp0\himanshu"
+cd /d "%~dp0\backend"
 
 echo Installing required dependencies...
 echo.

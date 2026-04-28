@@ -1,0 +1,20 @@
+# Virtual Environment
+venv/
+env/
+.env
+__pycache__/
+*.pyc
+
+# Local Data Storage
+data/
+*.sqlite3
+*.db
+faiss_db/
+chroma_db/
+logs/
+
+# Frontend specifics
+node_modules/
+.output/
+dist/
+.wxt/
